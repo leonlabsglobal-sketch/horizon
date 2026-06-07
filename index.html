@@ -623,34 +623,240 @@ function weeks8(){
   return wks;
 }
 
-function alloc(gross,costs){
-  const net=Math.max(0,gross-costs);const res=[];let rem=net;
-  const ord={priority:0,pct:1,fixed:2,target:3,remainder:4};
-  // First pass: all non-remainder pots
-  [...S.pots].filter(p=>p.rule.type!=='remainder').sort((a,b)=>ord[a.rule.type]-ord[b.rule.type]).forEach(p=>{
-    let amt=0,note='',skip=false;const r=p.rule;
-    if(r.type==='priority'){const fv=r.fundingType==='pct'?net*r.fundingValue/100:r.fundingValue||0;const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Already covered';}else{amt=Math.min(fv||need,need,rem);note=(r.fundingType==='pct'?r.fundingValue+'%':'\u00a3'+fmt(r.fundingValue||0))+' until \u00a3'+fmt(r.target)+' reached';}}
-    else if(r.type==='pct'){const raw=Math.round(net*r.value/100);amt=r.accountLimit?Math.min(raw,r.accountLimit,rem):Math.min(raw,rem);note=r.value+'% of incoming'+(r.accountLimit?' (max \u00a3'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='fixed'){amt=r.accountLimit?Math.min(r.value,r.accountLimit,rem):Math.min(r.value,rem);note='\u00a3'+fmt(r.value)+' per payment'+(r.accountLimit?' (max \u00a3'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='target'){const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Target reached';}else{const fv=r.fundingType==='pct'?Math.round(net*r.fundingValue/100):r.fundingValue||0;amt=Math.min(fv,need,rem);note=(r.fundingType==='pct'?r.fundingValue+'%':'\u00a3'+fmt(r.fundingValue||0))+' towards \u00a3'+fmt(r.target)+' goal';}}
-    rem=Math.max(0,rem-amt);res.push({p,amt,note,skip});
+// ── Smart allocation engine ──
+// Returns structured sections: accounts first, then pots, then remainder
+let _allocEdits = {}; // user overrides: key = item uid, value = amount
+
+function smartAlloc(gross, costs){
+  const net = Math.max(0, gross - costs);
+
+  // Section 1: Account shortfalls — cover bills first
+  const acctItems = [];
+  S.accounts.forEach(ac => {
+    const exp = acctExpenses(ac.id);
+    const short = Math.max(0, exp - ac.balance);
+    if(exp > 0){
+      acctItems.push({
+        uid: 'acct-' + ac.id,
+        name: ac.name,
+        color: ac.color,
+        suggested: Math.round(short),
+        note: short > 0 ? 'Short by £' + fmt(short) + ' against monthly bills' : 'Currently covered — top up optional',
+        isCovered: short === 0,
+        accountId: ac.id
+      });
+    }
   });
-  // Second pass: remainder pots split the leftover
-  const remPots=S.pots.filter(p=>p.rule.type==='remainder');
-  const totalRemPct=remPots.reduce((a,p)=>a+p.rule.value,0);
-  const remAtStart=rem;
-  remPots.forEach(p=>{
-    const share=totalRemPct>0?Math.round(remAtStart*(p.rule.value/totalRemPct)):0;
-    const amt=Math.min(share,rem);
-    rem=Math.max(0,rem-amt);
-    res.push({p,amt,note:p.rule.value+'% of remainder',skip:false});
+
+  // Section 2: Pots — apply rules against what's left after accounts
+  const acctTotal = acctItems.reduce((a, i) => a + i.suggested, 0);
+  let remForPots = Math.max(0, net - acctTotal);
+  const ord = {priority:0, pct:1, fixed:2, target:3, remainder:4};
+  const potItems = [];
+
+  [...S.pots].filter(p => p.rule.type !== 'remainder')
+    .sort((a,b) => ord[a.rule.type] - ord[b.rule.type])
+    .forEach(p => {
+      const r = p.rule;
+      let suggested = 0, note = '', skip = false;
+      if(r.type === 'priority'){
+        const fv = r.fundingType === 'pct' ? net * r.fundingValue / 100 : r.fundingValue || 0;
+        const need = Math.max(0, r.target - p.current);
+        if(need <= 0){ skip = true; note = 'Already at target'; }
+        else { suggested = Math.round(Math.min(fv || need, need, remForPots)); note = 'Fill first — up to £' + fmt(r.target) + ' target'; }
+      } else if(r.type === 'pct'){
+        const raw = Math.round(net * r.value / 100);
+        suggested = Math.min(r.accountLimit ? Math.min(raw, r.accountLimit) : raw, remForPots);
+        note = r.value + '% of incoming payment' + (r.accountLimit ? ' (max £' + fmt(r.accountLimit) + ')' : '');
+      } else if(r.type === 'fixed'){
+        suggested = Math.min(r.accountLimit ? Math.min(r.value, r.accountLimit) : r.value, remForPots);
+        note = '£' + fmt(r.value) + ' each payment' + (r.accountLimit ? ' (max £' + fmt(r.accountLimit) + ')' : '');
+      } else if(r.type === 'target'){
+        const need = Math.max(0, r.target - p.current);
+        if(need <= 0){ skip = true; note = 'Target reached'; }
+        else {
+          const fv = r.fundingType === 'pct' ? Math.round(net * r.fundingValue / 100) : r.fundingValue || 0;
+          suggested = Math.round(Math.min(fv, need, remForPots));
+          note = Math.min(100, Math.round(p.current / r.target * 100)) + '% towards £' + fmt(r.target) + ' goal';
+        }
+      }
+      if(!skip) remForPots = Math.max(0, remForPots - suggested);
+      potItems.push({ uid: 'pot-' + p.id, name: p.name, color: p.color, suggested, note, skip, pot: p });
+    });
+
+  // Remainder pots split what's left
+  const remPots = S.pots.filter(p => p.rule.type === 'remainder');
+  const totalRemPct = remPots.reduce((a,p) => a + p.rule.value, 0);
+  const remAtStart = remForPots;
+  remPots.forEach(p => {
+    const share = totalRemPct > 0 ? Math.round(remAtStart * (p.rule.value / totalRemPct)) : 0;
+    const suggested = Math.min(share, remForPots);
+    remForPots = Math.max(0, remForPots - suggested);
+    potItems.push({ uid: 'pot-' + p.id, name: p.name, color: p.color, suggested, note: p.rule.value + '% of what remains after other pots', skip: false, pot: p });
   });
-  // Check if fixed pots exceeded the net payment
-  const fixedTotal=S.pots.filter(p=>p.rule.type==='fixed').reduce((a,p)=>a+p.rule.value,0);
-  const fixedWarning=fixedTotal>net&&S.pots.some(p=>p.rule.type==='fixed');
-  return{res,rem,net,fixedTotal,fixedWarning};
+
+  return { net, acctItems, potItems };
 }
 
+function allocRemainder(){
+  const p = S.pending;
+  if(!p) return 0;
+  const r = smartAlloc(p.amount, p.costs || 0);
+  const net = r.net;
+  let used = 0;
+  [...r.acctItems, ...r.potItems].forEach(item => {
+    const v = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    if(!item.skip) used += Math.max(0, v);
+  });
+  return Math.max(0, net - used);
+}
+
+function updateAllocRemainder(){
+  const rem = allocRemainder();
+  const el = document.getElementById('alloc-remainder');
+  if(el) el.textContent = '£' + fmt(rem);
+}
+
+function rAllocate(){
+  const el = document.getElementById('alc');
+  const p = S.pending;
+  _allocEdits = {};
+
+  if(!p || !p.amount){
+    el.innerHTML = `<div style="text-align:center;padding:60px 24px;">
+      <p style="font-size:72px;font-family:var(--fs);font-weight:300;color:rgba(255,255,255,.1);margin-bottom:16px;">£</p>
+      <p style="font-size:24px;font-weight:300;font-family:var(--fs);margin-bottom:10px;color:var(--t1);">No payment to allocate</p>
+      <p style="font-size:14px;color:var(--t2);margin-bottom:28px;line-height:1.7;">Add a payment and Horizon will suggest exactly where each pound could go — you decide what to confirm.</p>
+      <button class="chip chip-solid chip-full" onclick="openModal('pay')">Add a payment →</button>
+    </div>`;
+    return;
+  }
+
+  const r = smartAlloc(p.amount, p.costs || 0);
+
+  const makeRow = (item) => {
+    if(item.skip) return `<div class="ar" style="opacity:.28">
+      <div class="ad" style="background:${item.color};"></div>
+      <div style="flex:1;"><div class="r"><span style="font-size:15px;font-weight:500;">${item.name}</span><span style="font-size:14px;color:var(--t3);">—</span></div>
+      <p style="font-size:12px;color:var(--t3);">${item.note}</p></div></div>`;
+    return `<div class="ar">
+      <div class="ad" style="background:${item.color};"></div>
+      <div style="flex:1;">
+        <div class="r" style="margin-bottom:3px;">
+          <span style="font-size:15px;font-weight:500;">${item.name}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:11px;color:var(--t3);">£</span>
+            <input type="number" value="${item.suggested}"
+              style="width:72px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;"
+              oninput="allocEdit('${item.uid}',this.value)"
+              inputmode="decimal">
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--t3);">${item.note}</p>
+      </div>
+    </div>`;
+  };
+
+  const acctSection = r.acctItems.length > 0 ? `
+    <div>
+      <p style="font-size:10px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">① Cover your accounts</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:10px;">Suggested to bring each account up to cover its regular bills</p>
+      <div class="glass" style="padding:6px 0;">${r.acctItems.map(makeRow).join('')}</div>
+    </div>` : '';
+
+  const potSection = r.potItems.length > 0 ? `
+    <div>
+      <p style="font-size:10px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">② Your savings pots</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:10px;">Based on your pot rules — adjust any amount before confirming</p>
+      <div class="glass" style="padding:6px 0;">${r.potItems.map(makeRow).join('')}</div>
+    </div>` : '';
+
+  const noPotsNote = r.potItems.length === 0 ? `<div style="padding:14px 16px;border-radius:14px;border:1px dashed rgba(255,255,255,.15);text-align:center;">
+    <p style="font-size:13px;color:var(--t3);margin-bottom:8px;">No savings pots set up yet</p>
+    <button class="chip chip-sm" onclick="go('manage');mt('pots',document.querySelector('#sc-manage .tab:nth-child(2)'))">Set up pots →</button>
+  </div>` : '';
+
+  const initialRem = Math.max(0, r.net - r.acctItems.reduce((a,i)=>a+i.suggested,0) - r.potItems.filter(i=>!i.skip).reduce((a,i)=>a+i.suggested,0));
+
+  el.innerHTML = `
+    <div style="position:relative;overflow:hidden;padding:24px;border-radius:16px;border:1px solid var(--grb);background:rgba(255,255,255,.16);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);">
+      <div style="position:absolute;right:-10px;bottom:-20px;font-size:100px;font-family:var(--fs);color:rgba(255,255,255,.08);line-height:1;pointer-events:none;">£</div>
+      <div style="position:relative;z-index:1;">
+        <div class="r" style="margin-bottom:16px;"><p class="lbl">incoming payment</p><div class="pill pgr"><span class="dot"></span>pending</div></div>
+        <p style="font-size:44px;font-weight:300;font-family:var(--fs);margin-bottom:6px;letter-spacing:-.02em;color:var(--t1);">£${fmt(p.amount)}</p>
+        <p style="font-size:14px;color:var(--t2);">${p.desc} · ${fmtD(p.date)}</p>
+        ${p.costs > 0 ? `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--grb);">
+          <div class="r" style="margin-bottom:8px;"><span style="font-size:13px;color:var(--t2);">Job costs</span><span style="font-size:13px;font-weight:500;color:var(--wa);">-£${fmt(p.costs)}</span></div>
+          <div class="r"><span style="font-size:14px;font-weight:500;">Net to allocate</span><span style="font-size:20px;font-weight:400;color:var(--gr);font-family:var(--fs);">£${fmt(r.net)}</span></div>
+        </div>` : ''}
+        <button class="chip chip-sm" style="margin-top:16px;font-size:12px;" onclick="openModal('pay')"><i class="ti ti-edit" style="font-size:12px;"></i>Edit payment</button>
+      </div>
+    </div>
+
+    ${acctSection}
+    ${potSection}
+    ${noPotsNote}
+
+    <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);">
+      <div class="r">
+        <div>
+          <p style="font-size:13px;color:var(--t2);margin-bottom:4px;">③ Yours to spend</p>
+          <p style="font-size:12px;color:var(--t3);">After all suggestions above — no strings attached</p>
+        </div>
+        <p style="font-size:28px;font-weight:300;font-family:var(--fs);color:var(--gr);" id="alloc-remainder">£${fmt(initialRem)}</p>
+      </div>
+    </div>
+
+    <p style="font-size:11px;color:rgba(255,255,255,.3);text-align:center;line-height:1.6;padding:0 8px;">These are suggestions only. Adjust any amount before confirming. Always make financial decisions based on your own circumstances.</p>
+
+    <button class="chip chip-solid chip-full" onclick="confirmAlloc()">Confirm — move money →</button>`;
+}
+
+function allocEdit(uid, val){
+  _allocEdits[uid] = Math.max(0, parseFloat(val) || 0);
+  updateAllocRemainder();
+}
+
+function confirmAlloc(){
+  const p = S.pending; if(!p) return;
+  const r = smartAlloc(p.amount, p.costs || 0);
+
+  // Apply account top-ups
+  r.acctItems.forEach(item => {
+    const amt = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    const ac = S.accounts.find(a => a.id === item.accountId);
+    if(ac && amt > 0){
+      ac.balance += amt;
+      if(!S.balanceUpdated) S.balanceUpdated = {};
+      S.balanceUpdated[ac.id] = td();
+    }
+  });
+
+  // Apply pot amounts
+  r.potItems.forEach(item => {
+    if(item.skip) return;
+    const amt = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    if(item.pot && amt > 0) item.pot.current += amt;
+  });
+
+  // Add gross to the chosen receiving account
+  if(p.accountId){
+    const ac = S.accounts.find(a => a.id === p.accountId);
+    if(ac){
+      // Only add what wasn't already distributed to accounts above
+      const acctAllocated = r.acctItems
+        .filter(i => i.accountId === p.accountId)
+        .reduce((a,i) => a + (_allocEdits[i.uid] !== undefined ? _allocEdits[i.uid] : i.suggested), 0);
+      ac.balance += Math.max(0, p.amount - acctAllocated);
+      if(!S.balanceUpdated) S.balanceUpdated = {};
+      S.balanceUpdated[ac.id] = td();
+    }
+  }
+
+  S.pending = null;
+  renderAll();
+  go('home');
+}
 function rForecast(){
   const wks=weeks8();const last=wks[7].bal;const hasRisk=wks.some(w=>w.bal<0);
   document.getElementById('fcend').textContent='\u00a3'+fmt(Math.max(0,last));
