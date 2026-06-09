@@ -166,11 +166,16 @@ select.inp option{background:rgba(15,18,28,.97);}
   </div>
   <!-- Quick Spend Bar -->
   <div id="qspend" style="padding:0 20px 10px;display:none;flex-shrink:0;">
-    <div style="display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 14px;">
-      <i class="ti ti-bolt" style="font-size:16px;color:rgba(255,255,255,.4);flex-shrink:0;"></i>
-      <input id="qs-amt" type="number" placeholder="Quick spend £" inputmode="decimal" style="flex:1;background:none;border:none;outline:none;color:var(--t1);font-size:15px;font-family:var(--ff);">
-      <select id="qs-acct" style="background:rgba(20,22,30,.9);border:none;outline:none;color:rgba(255,255,255,.55);font-size:13px;font-family:var(--ff);max-width:110px;border-radius:6px;padding:2px 4px;"></select>
-      <button onclick="doQuickSpend()" style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.22);border-radius:8px;color:var(--t1);font-size:13px;font-family:var(--ff);padding:6px 12px;cursor:pointer;">Done</button>
+    <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 14px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <i class="ti ti-bolt" style="font-size:16px;color:rgba(255,255,255,.4);flex-shrink:0;"></i>
+        <input id="qs-amt" type="number" placeholder="Amount £" inputmode="decimal" style="flex:1;min-width:0;background:none;border:none;outline:none;color:var(--t1);font-size:15px;font-family:var(--ff);">
+        <button onclick="doQuickSpend()" style="flex-shrink:0;background:rgba(255,255,255,.85);border:none;border-radius:8px;color:rgba(0,0,0,.85);font-size:13px;font-weight:600;font-family:var(--ff);padding:7px 16px;cursor:pointer;">Done</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:11px;color:rgba(255,255,255,.35);white-space:nowrap;">from account</span>
+        <select id="qs-acct" style="flex:1;min-width:0;background:rgba(20,22,30,.9);border:1px solid rgba(255,255,255,.15);border-radius:8px;outline:none;color:rgba(255,255,255,.75);font-size:13px;font-family:var(--ff);padding:5px 8px;"></select>
+      </div>
     </div>
   </div>
   <div class="home-upcoming">
