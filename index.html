@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -35,20 +35,18 @@
   window._fbOnValue = onValue;
   window._fbReady = true;
 
-  // Firebase stores arrays as objects — convert back on read
-  function toArr(v){ if(!v) return []; if(Array.isArray(v)) return v; return Object.values(v); }
-
   // Listen for remote changes
   onValue(dataRef, (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
     // Only update if change came from the other person (not our own save)
     if (window._suppressRemote) return;
-    if (data.accounts !== undefined) window.S.accounts = toArr(data.accounts);
-    if (data.income !== undefined) window.S.income = toArr(data.income);
-    if (data.expenses !== undefined) window.S.expenses = toArr(data.expenses);
-    if (data.pots !== undefined) window.S.pots = toArr(data.pots);
-    if (data.pending !== undefined) window.S.pending = data.pending || null;
+    if (data.accounts) window.S.accounts = data.accounts;
+    if (data.income) window.S.income = data.income;
+    if (data.expenses) window.S.expenses = data.expenses;
+    if (data.pots) window.S.pots = data.pots;
+    if (data.pending !== undefined) window.S.pending = data.pending;
+    if (data.balanceUpdated) window.S.balanceUpdated = data.balanceUpdated;
     window.renderAll();
   });
 </script>
@@ -87,6 +85,10 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:var(--ff);co
 
 .sc{display:none;flex-direction:column;height:100%;overflow:hidden;position:relative;z-index:1;}
 .sc.on{display:flex;}
+.sc.slide-in-right{animation:slideInRight .28s cubic-bezier(.32,.72,0,1) both;}
+.sc.slide-in-left{animation:slideInLeft .28s cubic-bezier(.32,.72,0,1) both;}
+@keyframes slideInRight{from{transform:translateX(18%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+@keyframes slideInLeft{from{transform:translateX(-18%);opacity:0;}to{transform:translateX(0);opacity:1;}}
 
 /* ── HOME ── */
 .home-hero{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;padding:0 24px 6px;min-height:0;}
@@ -320,8 +322,19 @@ select.inp option{background:rgba(15,18,28,.97);}
       </div>
     </div>
     <p class="home-greeting" id="hgreeting">Good morning</p>
+    <div id="hstatus-bar" style="display:none;margin-top:10px;padding:10px 14px;border-radius:12px;position:relative;z-index:2;"></div>
     <p id="haction" style="font-size:13px;letter-spacing:.02em;margin-top:8px;display:none;position:relative;z-index:2;"></p>
     <div class="acct-strips" id="haccts"></div>
+  </div>
+
+  <!-- Quick Spend Bar -->
+  <div id="qspend" style="padding:0 20px 10px;display:none;flex-shrink:0;">
+    <div style="display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 14px;">
+      <i class="ti ti-bolt" style="font-size:16px;color:rgba(255,255,255,.4);flex-shrink:0;"></i>
+      <input id="qs-amt" type="number" placeholder="Quick spend £" style="flex:1;background:none;border:none;outline:none;color:var(--t1);font-size:15px;font-family:var(--ff);" inputmode="decimal">
+      <select id="qs-acct" style="background:none;border:none;outline:none;color:rgba(255,255,255,.55);font-size:13px;font-family:var(--ff);max-width:100px;"></select>
+      <button onclick="doQuickSpend()" style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.22);border-radius:8px;color:var(--t1);font-size:13px;font-family:var(--ff);padding:6px 12px;cursor:pointer;">Done</button>
+    </div>
   </div>
 
   <div class="home-upcoming">
@@ -402,6 +415,10 @@ Object.assign(S,{
   openChip:-1
 });
 
+// Track when each account balance was last manually updated
+// keyed by account id, value = ISO date string
+if(!S.balanceUpdated) S.balanceUpdated={};
+
 // Background URL — loaded from localStorage or default
 let BG_URL = localStorage.getItem('hz_bg') || 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&q=80';
 
@@ -464,67 +481,96 @@ function weekSummaries(){
   return res;
 }
 
+function freshnessLabel(acId){
+  if(!S.balanceUpdated)return'';
+  const raw=S.balanceUpdated[acId];
+  if(!raw)return'';
+  const days=Math.floor((Date.now()-new Date(raw).getTime())/86400000);
+  if(days===0)return'updated today';
+  if(days===1)return'updated yesterday';
+  if(days<=6)return'updated '+days+'d ago';
+  return'<span style="color:var(--wa);">updated '+days+'d ago — tap to refresh</span>';
+}
+
 function rHome(){
-  // Empty state — no accounts set up yet
+  // Empty state
   if(S.accounts.length===0){
     document.getElementById('hgreeting').textContent=greet();
     document.getElementById('haction').style.display='none';
-    document.getElementById('haccts').innerHTML=`<div style="padding:12px 0;"><p style="font-size:13px;color:rgba(255,255,255,.5);">No accounts yet — go to <b style="color:#fff;">Manage</b> to set up your accounts first.</p></div>`;
+    document.getElementById('hstatus-bar').style.display='none';
+    document.getElementById('qspend').style.display='none';
+    document.getElementById('haccts').innerHTML='<div style="padding:12px 0;"><p style="font-size:13px;color:rgba(255,255,255,.5);">No accounts yet — go to <b style="color:#fff;">Manage</b> to set up your accounts first.</p></div>';
     document.getElementById('hwks').innerHTML='';
     document.getElementById('wdetail').classList.remove('on');
     document.getElementById('hinc').innerHTML='';
     return;
   }
-  const st=status();const d=runway();
+
   document.getElementById('hgreeting').textContent=greet();
-  // Action message — only shown when not covered, no year, single line
-  const actionEl=document.getElementById('haction');
-  if(st==='gr'){
-    actionEl.style.display='none';
-    actionEl.textContent='';
-  } else {
-    const rd=new Date();rd.setDate(rd.getDate()+runway());
-    const dateStr=rd.toLocaleDateString('en-GB',{day:'numeric',month:'long'});
-    actionEl.textContent=(st==='am'?'Action needed by ':'Low funds \u2014 act by ')+dateStr;
-    actionEl.style.color=st==='am'?'var(--am)':'var(--wa)';
-    actionEl.style.display='block';
-  }
+  document.getElementById('haction').style.display='none';
 
-  // Build home strips from accounts+pots with showHome flag
-  const homeItems=[
-    ...S.accounts.filter(a=>a.showHome).map(ac=>{
-      const cov=acctCovered(ac);const short=acctShort(ac);const exp=acctExpenses(ac.id);
-      return`<div class="acct-strip">
-        <div class="acct-name">
-          <div style="width:6px;height:6px;border-radius:50%;background:${ac.color};opacity:.9;flex-shrink:0;"></div>
-          <span>${ac.name}</span><span style="color:var(--t3);">\u00b7</span>
-          <span class="acct-bal">\u00a3${fmt(ac.balance)}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;color:var(--t3);">\u00a3${fmt(exp)}/mo</span>
-          ${cov?`<div class="pill pgr" style="font-size:10px;padding:2px 8px;"><span class="dot"></span>Covered</div>`:`<div class="pill pwa" style="font-size:10px;padding:2px 8px;">\u00a3${fmt(short)} short</div>`}
-        </div>
-      </div>`;
-    }),
-    ...S.pots.filter(p=>p.showHome).map(p=>{
-      return`<div class="acct-strip">
-        <div class="acct-name">
-          <div style="width:6px;height:6px;border-radius:50%;background:${p.color};opacity:.9;flex-shrink:0;"></div>
-          <span>${p.name}</span><span style="color:var(--t3);">\u00b7</span>
-          <span class="acct-bal">\u00a3${fmt(p.current)}</span>
-        </div>
-        <div class="pill" style="font-size:10px;padding:2px 8px;background:rgba(255,255,255,.08);color:var(--t2);border:1px solid var(--bd);">Pot</div>
-      </div>`;
-    })
-  ];
-  // Fallback: if nothing marked, show all accounts
-  const stripsHtml = homeItems.length>0 ? homeItems.join('') : S.accounts.map(ac=>{
-    const cov=acctCovered(ac);const short=acctShort(ac);const exp=acctExpenses(ac.id);
-    return`<div class="acct-strip"><div class="acct-name"><div style="width:6px;height:6px;border-radius:50%;background:${ac.color};opacity:.9;flex-shrink:0;"></div><span>${ac.name}</span><span style="color:var(--t3);">\u00b7</span><span class="acct-bal">\u00a3${fmt(ac.balance)}</span></div><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;color:var(--t3);">\u00a3${fmt(exp)}/mo</span>${cov?`<div class="pill pgr" style="font-size:10px;padding:2px 8px;"><span class="dot"></span>Covered</div>`:`<div class="pill pwa" style="font-size:10px;padding:2px 8px;">\u00a3${fmt(short)} short</div>`}</div></div>`;
-  }).join('');
-  document.getElementById('haccts').innerHTML=stripsHtml;
-
+  // Smart status bar
+  const st=status();const d=runway();
+  const sbar=document.getElementById('hstatus-bar');
   const sums=weekSummaries();
+  const thisWeekShort=sums.length>0&&!sums[0].allCovered;
+  let sbBg,sbColor,sbBorder,sbIcon,sbMsg,sbSub;
+  if(st==='gr'&&!thisWeekShort){
+    sbBg='var(--grg)';sbColor='var(--gr)';sbBorder='var(--grb)';sbIcon='ti-circle-check';
+    sbMsg="You’re covered";sbSub='Bills funded · '+d+' days runway';
+  } else if(thisWeekShort){
+    sbBg='var(--wag)';sbColor='var(--wa)';sbBorder='var(--wab)';sbIcon='ti-alert-triangle';
+    const names=sums[0].acctBreaks.filter(a=>!a.covered).map(a=>a.name).join(', ');
+    sbMsg='This week is short';sbSub=names+' need topping up';
+  } else if(st==='am'){
+    sbBg='var(--amg)';sbColor='var(--am)';sbBorder='var(--amb)';sbIcon='ti-clock';
+    const rd=new Date();rd.setDate(rd.getDate()+d);
+    sbMsg='Action needed soon';sbSub='Funds run low by '+rd.toLocaleDateString('en-GB',{day:'numeric',month:'long'});
+  } else {
+    sbBg='var(--wag)';sbColor='var(--wa)';sbBorder='var(--wab)';sbIcon='ti-alert-triangle';
+    sbMsg='Low funds';sbSub='Top up accounts to cover bills';
+  }
+  sbar.style.cssText='display:flex;align-items:center;gap:10px;margin-top:10px;padding:10px 14px;border-radius:12px;position:relative;z-index:2;background:'+sbBg+';border:1px solid '+sbBorder+';';
+  sbar.innerHTML='<i class="ti '+sbIcon+'" style="font-size:18px;color:'+sbColor+';flex-shrink:0;"></i><div><p style="font-size:14px;font-weight:600;color:'+sbColor+';line-height:1.2;">'+sbMsg+'</p><p style="font-size:12px;color:'+sbColor+';opacity:.75;margin-top:2px;">'+sbSub+'</p></div>';
+
+  // Quick spend bar - populate account dropdown
+  const qspend=document.getElementById('qspend');
+  qspend.style.display='block';
+  const qsel=document.getElementById('qs-acct');
+  const prev=qsel.value;
+  qsel.innerHTML=S.accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('');
+  if(prev)qsel.value=prev;
+
+  // Account strips
+  const acctStrip=ac=>{
+    const cov=acctCovered(ac);const short=acctShort(ac);const exp=acctExpenses(ac.id);
+    const fresh=freshnessLabel(ac.id);
+    return`<div class="acct-strip" onclick="openModal('edit-acct',${ac.id})" style="cursor:pointer;">
+      <div class="acct-name" style="flex-direction:column;align-items:flex-start;gap:2px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:${ac.color};opacity:.9;flex-shrink:0;"></div>
+          <span>${ac.name}</span><span style="color:var(--t3);">·</span>
+          <span class="acct-bal">£${fmt(ac.balance)}</span>
+        </div>
+        ${fresh?`<span style="font-size:10px;color:var(--t3);padding-left:14px;">${fresh}</span>`:''}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:11px;color:var(--t3);">£${fmt(exp)}/mo</span>
+        ${cov?`<div class="pill pgr" style="font-size:10px;padding:2px 8px;"><span class="dot"></span>Covered</div>`:`<div class="pill pwa" style="font-size:10px;padding:2px 8px;">£${fmt(short)} short</div>`}
+      </div>
+    </div>`;
+  };
+  const homeItems=[
+    ...S.accounts.filter(a=>a.showHome).map(acctStrip),
+    ...S.pots.filter(p=>p.showHome).map(p=>`<div class="acct-strip">
+      <div class="acct-name"><div style="width:6px;height:6px;border-radius:50%;background:${p.color};opacity:.9;flex-shrink:0;"></div>
+      <span>${p.name}</span><span style="color:var(--t3);">·</span><span class="acct-bal">£${fmt(p.current)}</span></div>
+      <div class="pill" style="font-size:10px;padding:2px 8px;background:rgba(255,255,255,.08);color:var(--t2);border:1px solid var(--bd);">Pot</div>
+    </div>`)
+  ];
+  document.getElementById('haccts').innerHTML=(homeItems.length>0?homeItems:S.accounts.map(acctStrip)).join('');
+
+  // Week chips
   document.getElementById('hwks').innerHTML=sums.map((s,i)=>{
     const stColor=s.allCovered?'var(--gr)':'var(--wa)';
     return`<div class="wchip" id="wc${i}" onclick="tChip(${i},${JSON.stringify(s).replace(/"/g,'&quot;')})">
@@ -532,7 +578,7 @@ function rHome(){
         <span class="wchip-label">${s.label}</span>
         <i class="ti ti-${s.allCovered?'check':'alert-triangle'}" style="font-size:12px;color:${stColor};"></i>
       </div>
-      <span class="wchip-amt">\u00a3${fmt(s.total)}</span>
+      <span class="wchip-amt">£${fmt(s.total)}</span>
       <div class="pill" style="font-size:9px;padding:2px 7px;background:${s.allCovered?'var(--grg)':'var(--wag)'};color:${stColor};border:1px solid ${s.allCovered?'var(--grb)':'var(--wab)'};">${s.allCovered?'Covered':'Short'}</div>
     </div>`;
   }).join('');
@@ -540,17 +586,18 @@ function rHome(){
   document.getElementById('wdetail').innerHTML='';
   S.openChip=-1;
 
+  // Next income + clean up stale one-offs
   const t=td();
+  S.income=S.income.filter(i=>i.freq!=='one-off'||i.date>=t);
   const ni=S.income.filter(i=>i.date>=t).sort((a,b)=>a.date.localeCompare(b.date))[0];
   const el=document.getElementById('hinc');
   if(ni){
     const days=Math.max(0,Math.round((new Date(ni.date)-N())/86400000));
     const ds=days===0?'today':days===1?'tomorrow':'in '+days+' days';
     const showPlan=!!S.pending;
-    el.innerHTML=`<div class="next-strip"><div class="c g4"><span style="font-size:16px;font-weight:500;color:var(--gr);font-family:var(--fs);">+\u00a3${fmt(ni.amount)}</span><span style="font-size:12px;color:var(--t3);">${ni.name} \u00b7 ${ds}</span></div>${showPlan?`<button class="chip chip-sm" onclick="go('allocate')" style="font-size:12px;">Plan \u2192</button>`:`<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Planned</div>`}</div>`;
+    el.innerHTML=`<div class="next-strip"><div class="c g4"><span style="font-size:16px;font-weight:500;color:var(--gr);font-family:var(--fs);">+£${fmt(ni.amount)}</span><span style="font-size:12px;color:var(--t3);">${ni.name} · ${ds}</span></div>${showPlan?`<button class="chip chip-sm" onclick="go('allocate')" style="font-size:12px;">Plan →</button>`:`<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Planned</div>`}</div>`;
   } else {el.innerHTML='';}
 }
-
 function tChip(i,s){
   const chip=document.getElementById('wc'+i);const det=document.getElementById('wdetail');
   if(S.openChip===i){det.classList.remove('on');det.innerHTML='';S.openChip=-1;document.querySelectorAll('.wchip').forEach(c=>c.classList.remove('on'));return;}
@@ -576,34 +623,240 @@ function weeks8(){
   return wks;
 }
 
-function alloc(gross,costs){
-  const net=Math.max(0,gross-costs);const res=[];let rem=net;
-  const ord={priority:0,pct:1,fixed:2,target:3,remainder:4};
-  // First pass: all non-remainder pots
-  [...S.pots].filter(p=>p.rule.type!=='remainder').sort((a,b)=>ord[a.rule.type]-ord[b.rule.type]).forEach(p=>{
-    let amt=0,note='',skip=false;const r=p.rule;
-    if(r.type==='priority'){const fv=r.fundingType==='pct'?net*r.fundingValue/100:r.fundingValue||0;const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Already covered';}else{amt=Math.min(fv||need,need,rem);note=(r.fundingType==='pct'?r.fundingValue+'%':'\u00a3'+fmt(r.fundingValue||0))+' until \u00a3'+fmt(r.target)+' reached';}}
-    else if(r.type==='pct'){const raw=Math.round(net*r.value/100);amt=r.accountLimit?Math.min(raw,r.accountLimit,rem):Math.min(raw,rem);note=r.value+'% of incoming'+(r.accountLimit?' (max \u00a3'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='fixed'){amt=r.accountLimit?Math.min(r.value,r.accountLimit,rem):Math.min(r.value,rem);note='\u00a3'+fmt(r.value)+' per payment'+(r.accountLimit?' (max \u00a3'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='target'){const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Target reached';}else{const fv=r.fundingType==='pct'?Math.round(net*r.fundingValue/100):r.fundingValue||0;amt=Math.min(fv,need,rem);note=(r.fundingType==='pct'?r.fundingValue+'%':'\u00a3'+fmt(r.fundingValue||0))+' towards \u00a3'+fmt(r.target)+' goal';}}
-    rem=Math.max(0,rem-amt);res.push({p,amt,note,skip});
+// ── Smart allocation engine ──
+// Returns structured sections: accounts first, then pots, then remainder
+let _allocEdits = {}; // user overrides: key = item uid, value = amount
+
+function smartAlloc(gross, costs){
+  const net = Math.max(0, gross - costs);
+
+  // Section 1: Account shortfalls — cover bills first
+  const acctItems = [];
+  S.accounts.forEach(ac => {
+    const exp = acctExpenses(ac.id);
+    const short = Math.max(0, exp - ac.balance);
+    if(exp > 0){
+      acctItems.push({
+        uid: 'acct-' + ac.id,
+        name: ac.name,
+        color: ac.color,
+        suggested: Math.round(short),
+        note: short > 0 ? 'Short by £' + fmt(short) + ' against monthly bills' : 'Currently covered — top up optional',
+        isCovered: short === 0,
+        accountId: ac.id
+      });
+    }
   });
-  // Second pass: remainder pots split the leftover
-  const remPots=S.pots.filter(p=>p.rule.type==='remainder');
-  const totalRemPct=remPots.reduce((a,p)=>a+p.rule.value,0);
-  const remAtStart=rem;
-  remPots.forEach(p=>{
-    const share=totalRemPct>0?Math.round(remAtStart*(p.rule.value/totalRemPct)):0;
-    const amt=Math.min(share,rem);
-    rem=Math.max(0,rem-amt);
-    res.push({p,amt,note:p.rule.value+'% of remainder',skip:false});
+
+  // Section 2: Pots — apply rules against what's left after accounts
+  const acctTotal = acctItems.reduce((a, i) => a + i.suggested, 0);
+  let remForPots = Math.max(0, net - acctTotal);
+  const ord = {priority:0, pct:1, fixed:2, target:3, remainder:4};
+  const potItems = [];
+
+  [...S.pots].filter(p => p.rule.type !== 'remainder')
+    .sort((a,b) => ord[a.rule.type] - ord[b.rule.type])
+    .forEach(p => {
+      const r = p.rule;
+      let suggested = 0, note = '', skip = false;
+      if(r.type === 'priority'){
+        const fv = r.fundingType === 'pct' ? net * r.fundingValue / 100 : r.fundingValue || 0;
+        const need = Math.max(0, r.target - p.current);
+        if(need <= 0){ skip = true; note = 'Already at target'; }
+        else { suggested = Math.round(Math.min(fv || need, need, remForPots)); note = 'Fill first — up to £' + fmt(r.target) + ' target'; }
+      } else if(r.type === 'pct'){
+        const raw = Math.round(net * r.value / 100);
+        suggested = Math.min(r.accountLimit ? Math.min(raw, r.accountLimit) : raw, remForPots);
+        note = r.value + '% of incoming payment' + (r.accountLimit ? ' (max £' + fmt(r.accountLimit) + ')' : '');
+      } else if(r.type === 'fixed'){
+        suggested = Math.min(r.accountLimit ? Math.min(r.value, r.accountLimit) : r.value, remForPots);
+        note = '£' + fmt(r.value) + ' each payment' + (r.accountLimit ? ' (max £' + fmt(r.accountLimit) + ')' : '');
+      } else if(r.type === 'target'){
+        const need = Math.max(0, r.target - p.current);
+        if(need <= 0){ skip = true; note = 'Target reached'; }
+        else {
+          const fv = r.fundingType === 'pct' ? Math.round(net * r.fundingValue / 100) : r.fundingValue || 0;
+          suggested = Math.round(Math.min(fv, need, remForPots));
+          note = Math.min(100, Math.round(p.current / r.target * 100)) + '% towards £' + fmt(r.target) + ' goal';
+        }
+      }
+      if(!skip) remForPots = Math.max(0, remForPots - suggested);
+      potItems.push({ uid: 'pot-' + p.id, name: p.name, color: p.color, suggested, note, skip, pot: p });
+    });
+
+  // Remainder pots split what's left
+  const remPots = S.pots.filter(p => p.rule.type === 'remainder');
+  const totalRemPct = remPots.reduce((a,p) => a + p.rule.value, 0);
+  const remAtStart = remForPots;
+  remPots.forEach(p => {
+    const share = totalRemPct > 0 ? Math.round(remAtStart * (p.rule.value / totalRemPct)) : 0;
+    const suggested = Math.min(share, remForPots);
+    remForPots = Math.max(0, remForPots - suggested);
+    potItems.push({ uid: 'pot-' + p.id, name: p.name, color: p.color, suggested, note: p.rule.value + '% of what remains after other pots', skip: false, pot: p });
   });
-  // Check if fixed pots exceeded the net payment
-  const fixedTotal=S.pots.filter(p=>p.rule.type==='fixed').reduce((a,p)=>a+p.rule.value,0);
-  const fixedWarning=fixedTotal>net&&S.pots.some(p=>p.rule.type==='fixed');
-  return{res,rem,net,fixedTotal,fixedWarning};
+
+  return { net, acctItems, potItems };
 }
 
+function allocRemainder(){
+  const p = S.pending;
+  if(!p) return 0;
+  const r = smartAlloc(p.amount, p.costs || 0);
+  const net = r.net;
+  let used = 0;
+  [...r.acctItems, ...r.potItems].forEach(item => {
+    const v = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    if(!item.skip) used += Math.max(0, v);
+  });
+  return Math.max(0, net - used);
+}
+
+function updateAllocRemainder(){
+  const rem = allocRemainder();
+  const el = document.getElementById('alloc-remainder');
+  if(el) el.textContent = '£' + fmt(rem);
+}
+
+function rAllocate(){
+  const el = document.getElementById('alc');
+  const p = S.pending;
+  _allocEdits = {};
+
+  if(!p || !p.amount){
+    el.innerHTML = `<div style="text-align:center;padding:60px 24px;">
+      <p style="font-size:72px;font-family:var(--fs);font-weight:300;color:rgba(255,255,255,.1);margin-bottom:16px;">£</p>
+      <p style="font-size:24px;font-weight:300;font-family:var(--fs);margin-bottom:10px;color:var(--t1);">No payment to allocate</p>
+      <p style="font-size:14px;color:var(--t2);margin-bottom:28px;line-height:1.7;">Add a payment and Horizon will suggest exactly where each pound could go — you decide what to confirm.</p>
+      <button class="chip chip-solid chip-full" onclick="openModal('pay')">Add a payment →</button>
+    </div>`;
+    return;
+  }
+
+  const r = smartAlloc(p.amount, p.costs || 0);
+
+  const makeRow = (item) => {
+    if(item.skip) return `<div class="ar" style="opacity:.28">
+      <div class="ad" style="background:${item.color};"></div>
+      <div style="flex:1;"><div class="r"><span style="font-size:15px;font-weight:500;">${item.name}</span><span style="font-size:14px;color:var(--t3);">—</span></div>
+      <p style="font-size:12px;color:var(--t3);">${item.note}</p></div></div>`;
+    return `<div class="ar">
+      <div class="ad" style="background:${item.color};"></div>
+      <div style="flex:1;">
+        <div class="r" style="margin-bottom:3px;">
+          <span style="font-size:15px;font-weight:500;">${item.name}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:11px;color:var(--t3);">£</span>
+            <input type="number" value="${item.suggested}"
+              style="width:72px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;"
+              oninput="allocEdit('${item.uid}',this.value)"
+              inputmode="decimal">
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--t3);">${item.note}</p>
+      </div>
+    </div>`;
+  };
+
+  const acctSection = r.acctItems.length > 0 ? `
+    <div>
+      <p style="font-size:10px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">① Cover your accounts</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:10px;">Suggested to bring each account up to cover its regular bills</p>
+      <div class="glass" style="padding:6px 0;">${r.acctItems.map(makeRow).join('')}</div>
+    </div>` : '';
+
+  const potSection = r.potItems.length > 0 ? `
+    <div>
+      <p style="font-size:10px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">② Your savings pots</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:10px;">Based on your pot rules — adjust any amount before confirming</p>
+      <div class="glass" style="padding:6px 0;">${r.potItems.map(makeRow).join('')}</div>
+    </div>` : '';
+
+  const noPotsNote = r.potItems.length === 0 ? `<div style="padding:14px 16px;border-radius:14px;border:1px dashed rgba(255,255,255,.15);text-align:center;">
+    <p style="font-size:13px;color:var(--t3);margin-bottom:8px;">No savings pots set up yet</p>
+    <button class="chip chip-sm" onclick="go('manage');mt('pots',document.querySelector('#sc-manage .tab:nth-child(2)'))">Set up pots →</button>
+  </div>` : '';
+
+  const initialRem = Math.max(0, r.net - r.acctItems.reduce((a,i)=>a+i.suggested,0) - r.potItems.filter(i=>!i.skip).reduce((a,i)=>a+i.suggested,0));
+
+  el.innerHTML = `
+    <div style="position:relative;overflow:hidden;padding:24px;border-radius:16px;border:1px solid var(--grb);background:rgba(255,255,255,.16);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);">
+      <div style="position:absolute;right:-10px;bottom:-20px;font-size:100px;font-family:var(--fs);color:rgba(255,255,255,.08);line-height:1;pointer-events:none;">£</div>
+      <div style="position:relative;z-index:1;">
+        <div class="r" style="margin-bottom:16px;"><p class="lbl">incoming payment</p><div class="pill pgr"><span class="dot"></span>pending</div></div>
+        <p style="font-size:44px;font-weight:300;font-family:var(--fs);margin-bottom:6px;letter-spacing:-.02em;color:var(--t1);">£${fmt(p.amount)}</p>
+        <p style="font-size:14px;color:var(--t2);">${p.desc} · ${fmtD(p.date)}</p>
+        ${p.costs > 0 ? `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--grb);">
+          <div class="r" style="margin-bottom:8px;"><span style="font-size:13px;color:var(--t2);">Job costs</span><span style="font-size:13px;font-weight:500;color:var(--wa);">-£${fmt(p.costs)}</span></div>
+          <div class="r"><span style="font-size:14px;font-weight:500;">Net to allocate</span><span style="font-size:20px;font-weight:400;color:var(--gr);font-family:var(--fs);">£${fmt(r.net)}</span></div>
+        </div>` : ''}
+        <button class="chip chip-sm" style="margin-top:16px;font-size:12px;" onclick="openModal('pay')"><i class="ti ti-edit" style="font-size:12px;"></i>Edit payment</button>
+      </div>
+    </div>
+
+    ${acctSection}
+    ${potSection}
+    ${noPotsNote}
+
+    <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);">
+      <div class="r">
+        <div>
+          <p style="font-size:13px;color:var(--t2);margin-bottom:4px;">③ Yours to spend</p>
+          <p style="font-size:12px;color:var(--t3);">After all suggestions above — no strings attached</p>
+        </div>
+        <p style="font-size:28px;font-weight:300;font-family:var(--fs);color:var(--gr);" id="alloc-remainder">£${fmt(initialRem)}</p>
+      </div>
+    </div>
+
+    <p style="font-size:11px;color:rgba(255,255,255,.3);text-align:center;line-height:1.6;padding:0 8px;">These are suggestions only. Adjust any amount before confirming. Always make financial decisions based on your own circumstances.</p>
+
+    <button class="chip chip-solid chip-full" onclick="confirmAlloc()">Confirm — move money →</button>`;
+}
+
+function allocEdit(uid, val){
+  _allocEdits[uid] = Math.max(0, parseFloat(val) || 0);
+  updateAllocRemainder();
+}
+
+function confirmAlloc(){
+  const p = S.pending; if(!p) return;
+  const r = smartAlloc(p.amount, p.costs || 0);
+
+  // Apply account top-ups
+  r.acctItems.forEach(item => {
+    const amt = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    const ac = S.accounts.find(a => a.id === item.accountId);
+    if(ac && amt > 0){
+      ac.balance += amt;
+      if(!S.balanceUpdated) S.balanceUpdated = {};
+      S.balanceUpdated[ac.id] = td();
+    }
+  });
+
+  // Apply pot amounts
+  r.potItems.forEach(item => {
+    if(item.skip) return;
+    const amt = _allocEdits[item.uid] !== undefined ? _allocEdits[item.uid] : item.suggested;
+    if(item.pot && amt > 0) item.pot.current += amt;
+  });
+
+  // Add gross to the chosen receiving account
+  if(p.accountId){
+    const ac = S.accounts.find(a => a.id === p.accountId);
+    if(ac){
+      // Only add what wasn't already distributed to accounts above
+      const acctAllocated = r.acctItems
+        .filter(i => i.accountId === p.accountId)
+        .reduce((a,i) => a + (_allocEdits[i.uid] !== undefined ? _allocEdits[i.uid] : i.suggested), 0);
+      ac.balance += Math.max(0, p.amount - acctAllocated);
+      if(!S.balanceUpdated) S.balanceUpdated = {};
+      S.balanceUpdated[ac.id] = td();
+    }
+  }
+
+  S.pending = null;
+  renderAll();
+  go('home');
+}
 function rForecast(){
   const wks=weeks8();const last=wks[7].bal;const hasRisk=wks.some(w=>w.bal<0);
   document.getElementById('fcend').textContent='\u00a3'+fmt(Math.max(0,last));
@@ -667,9 +920,10 @@ function rManage(){
                 :totalPct===100?'✔ Fully allocated — 100% assigned'
                 :totalPct>0?totalPct+'% assigned · '+(100-totalPct)+'% free'
                 :'No percentage pots set up yet';
-    const pctBar='<div style="padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">% pots total</p><p style="font-size:12px;font-weight:600;color:'+pctColor+';">'+pctMsg+'</p></div>';
-    const potCards=S.pots.map(p=>`<div class="glass"><div class="r" style="margin-bottom:${p.rule.target?14:10}px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:${p.color};"></div><div><p style="font-size:16px;font-weight:500;color:var(--t1);">${p.name}</p><p style="font-size:12px;color:var(--t3);margin-top:2px;">${rd(p.rule)}</p></div></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£${fmt(p.current)}</p></div>${p.rule.target?`<div class="btr" style="margin-bottom:8px;"><div class="bfill" style="width:${Math.min(100,Math.round(p.current/p.rule.target*100))}%;background:${p.color};"></div></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">${Math.min(100,Math.round(p.current/p.rule.target*100))}% towards £${fmt(p.rule.target)}</p>`:'<div style="height:6px;"></div>'}<div class="r" style="margin-bottom:10px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome('pot',${p.id})" style="width:42px;height:24px;border-radius:12px;background:${p.showHome?'var(--gr)':'rgba(255,255,255,.15)'};position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:${p.showHome?'21px':'3px'};transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot(${p.id},-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot(${p.id},1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal('edit-pot',${p.id})"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="flex:1;" onclick="delPot(${p.id})"><i class="ti ti-trash" style="font-size:13px;"></i>Remove</button></div></div>`).join('');
-    el.innerHTML=pctBar+potCards+`<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal('add-pot')"><i class="ti ti-plus"></i>Add pot</button>`;
+;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">% pots total</p><p style="font-size:12px;font-weight:600;color:'+pctColor+';">'+pctMsg+'</p></div>';
+    const potCards=S.pots.map(p=>`<div class="glass"><div class="r" style="margin-bottom:${p.rule.target?14:10}px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:${p.color};"></div><div><p style="font-size:16px;font-weight:500;color:var(--t1);">${p.name}</p><p style="font-size:12px;color:var(--t3);margin-top:2px;">${rd(p.rule)}</p></div></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£${fmt(p.current)}</p></div>${p.rule.target?`<div class="btr" style="margin-bottom:8px;"><div class="bfill" style="width:${Math.min(100,Math.round(p.current/p.rule.target*100))}%;background:${p.color};"></div></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">${Math.min(100,Math.round(p.current/p.rule.target*100))}% towards £${fmt(p.rule.target)}</p>`:'<div style="height:6px;"></div>'}<div class="r" style="margin-bottom:10px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome('pot',${p.id})" style="width:42px;height:24px;border-radius:12px;background:${p.showHome?'var(--gr)':'rgba(255,255,255,.15)'};position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:${p.showHome?'21px':'3px'};transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot(${p.id},-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot(${p.id},1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal('withdraw-pot',${p.id})"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal('edit-pot',${p.id})"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="delPot(${p.id})"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>`).join('');
+    const potTotalCard='<div style="padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">Total in pots</p><p style="font-size:16px;font-weight:500;color:var(--t1);font-family:var(--fs);">£'+fmt(potTotal)+'</p></div>';
+    el.innerHTML=potTotalCard+pctBar+potCards+`<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal('add-pot')"><i class="ti ti-plus"></i>Add pot</button>`;
     } else if(t==='income'){
     el.innerHTML=S.income.map(i=>`<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">${i.name}</p><p style="font-size:12px;color:var(--t3);">${i.cat} \u00b7 ${i.freq}</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+\u00a3${fmt(i.amount)}</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal('edit-inc',${i.id})"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="delInc(${i.id})"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>`).join('')+`<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal('add-inc')"><i class="ti ti-plus"></i>Add income source</button>`;
   } else if(t==='expenses'){
@@ -677,9 +931,26 @@ function rManage(){
   }
 }
 
-function mt(t,el){S.mgTab=t;document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));el.classList.add('on');rManage();}
+function mt(t,el){S.mgTab=t;document.querySelectorAll('#sc-manage .tab').forEach(x=>x.classList.remove('on'));el.classList.add('on');rManage();}
 function delAcct(id){if(S.accounts.length<=1)return;S.accounts=S.accounts.filter(a=>a.id!==id);renderAll();}
 function delPot(id){S.pots=S.pots.filter(p=>p.id!==id);rManage();}
+function doWithdrawPot(id){
+  const p=S.pots.find(x=>x.id===id);if(!p)return;
+  const amt=parseFloat(document.getElementById('m-wd-amt').value)||0;
+  if(!amt||amt<=0)return;
+  const withdraw=Math.min(amt,p.current);
+  p.current=Math.max(0,p.current-withdraw);
+  const acctId=parseInt(document.getElementById('m-wd-acct').value)||null;
+  if(acctId){
+    const ac=S.accounts.find(a=>a.id===acctId);
+    if(ac){
+      ac.balance+=withdraw;
+      if(!S.balanceUpdated)S.balanceUpdated={};
+      S.balanceUpdated[ac.id]=td();
+    }
+  }
+  closeModal();renderAll();
+}
 function movePot(id,dir){const i=S.pots.findIndex(p=>p.id===id);const j=i+dir;if(j<0||j>=S.pots.length)return;[S.pots[i],S.pots[j]]=[S.pots[j],S.pots[i]];rManage();saveState();}
 function homeCount(){return S.accounts.filter(a=>a.showHome).length+S.pots.filter(p=>p.showHome).length;}
 function toggleHome(type,id){
@@ -723,13 +994,15 @@ const COLORS=['rgba(255,255,255,.9)','#F5C842','#60A5FA','#C084FC','#E8B86D','#E
 function openModal(type,id){
   _eid=id||null;const b=document.getElementById('mbody');
   const hdr=(t,s)=>`<p style="font-size:22px;font-weight:300;font-family:var(--fs);color:var(--t1);margin-bottom:${s?6:20}px;">${t}</p>${s?`<p style="font-size:13px;color:var(--t2);margin-bottom:20px;">${s}</p>`:''}`;
-  if(type==='mi'||type==='mo'){const isMI=type==='mi';b.innerHTML=hdr(isMI?'Money received':'Record a spend',isMI?'You\'ll go straight to Allocate.':'Updates balance instantly.')+`<div class="c g12">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number" placeholder="0.00">${L2(isMI?'What\'s it from?':'What was it?')}<input class="inp" id="m-desc" placeholder="${isMI?'e.g. Client deposit':'e.g. Fuel, tools'}">${foot(isMI?'Add &amp; Allocate \u2192':'Record spend',isMI?'doMI()':'doMO()')}</div>`;}
-  else if(type==='pay'){const p=S.pending||{};const acOpts=S.accounts.map(a=>`<option value="${a.id}" ${a.id===p.accountId?'selected':''}>${a.name}</option>`).join('');b.innerHTML=hdr('Incoming payment','Job costs come off before allocation.')+`<div class="c g12">${L2('Amount (£)')}<input class="inp" id="ap-a" type="number" value="${p.amount||''}">${L2('Description')}<input class="inp" id="ap-d" value="${p.desc||''}" placeholder="Client or job">${L2('Which account does this go into?')}<select class="inp" id="ap-acct">${acOpts}</select>${L2('Date')}<input class="inp" id="ap-dt" type="date" value="${p.date||td()}">${L2('Job costs (£)')}<input class="inp" id="ap-c" type="number" value="${p.costs||''}" placeholder="0">${L2('Frequency')}<select class="inp" id="ap-f"><option value="one-off" ${(p.freq||'one-off')==='one-off'?'selected':''}>One-off</option><option value="monthly" ${p.freq==='monthly'?'selected':''}>Monthly</option><option value="weekly" ${p.freq==='weekly'?'selected':''}>Weekly</option></select>${foot('Get allocation \u2192','savePay()')}</div>`;}
+  if(type==='mi'||type==='mo'){const isMI=type==='mi';
+    const acOpts=S.accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('');
+    b.innerHTML=hdr(isMI?'Money received':'Record a spend',isMI?'You\'ll go straight to Allocate.':'Updates balance instantly.')+`<div class="c g12">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number" placeholder="0.00">${L2(isMI?'What\'s it from?':'What was it?')}<input class="inp" id="m-desc" placeholder="${isMI?'e.g. Client deposit':'e.g. Fuel, tools'}">${isMI?'':L2('Which account?')+`<select class="inp" id="m-mo-acct">${acOpts}</select>`}${foot(isMI?'Add &amp; Allocate →':'Record spend',isMI?'doMI()':'doMO()')}</div>`;}else if(type==='pay'){const p=S.pending||{};const acOpts=S.accounts.map(a=>`<option value="${a.id}" ${a.id===p.accountId?'selected':''}>${a.name}</option>`).join('');b.innerHTML=hdr('Incoming payment','Job costs come off before allocation.')+`<div class="c g12">${L2('Amount (£)')}<input class="inp" id="ap-a" type="number" value="${p.amount||''}">${L2('Description')}<input class="inp" id="ap-d" value="${p.desc||''}" placeholder="Client or job">${L2('Which account does this go into?')}<select class="inp" id="ap-acct">${acOpts}</select>${L2('Date')}<input class="inp" id="ap-dt" type="date" value="${p.date||td()}">${L2('Job costs (£)')}<input class="inp" id="ap-c" type="number" value="${p.costs||''}" placeholder="0">${L2('Frequency')}<select class="inp" id="ap-f"><option value="one-off" ${(p.freq||'one-off')==='one-off'?'selected':''}>One-off</option><option value="monthly" ${p.freq==='monthly'?'selected':''}>Monthly</option><option value="weekly" ${p.freq==='weekly'?'selected':''}>Weekly</option></select>${foot('Get allocation \u2192','savePay()')}</div>`;}
   else if(type==='add-acct'){b.innerHTML=hdr('New account')+`<div class="c g12">${L2('Account name')}<input class="inp" id="m-name" placeholder="e.g. Bills, Business, Personal">${L2('Current balance (£)')}<input class="inp" id="m-bal" type="number" placeholder="0">${foot('Add account','saveAcct(false)')}</div>`;}
   else if(type==='edit-acct'){const ac=S.accounts.find(x=>x.id===id);if(!ac)return;b.innerHTML=hdr('Edit \u00b7 '+ac.name)+`<div class="c g12">${L2('Account name')}<input class="inp" id="m-name" value="${ac.name}">${L2('Current balance (£)')}<input class="inp" id="m-bal" type="number" value="${ac.balance}">${foot('Save changes','saveAcct(true)')}</div>`;}
   else if(type==='add-pot'){b.innerHTML=hdr('New pot')+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" placeholder="e.g. Tax, Holiday, Vehicle">${L2('Starting balance (£)')}<input class="inp" id="m-bal" type="number" placeholder="0">${L2('Funding rule')}<select class="inp" id="m-rtype" onchange="updatePotFields()">${['pct:% of each payment','fixed:Fixed amount per payment','target:Save to a target','priority:Priority shortfall','remainder:Remainder split'].map(x=>{const[v,l]=x.split(':');return`<option value="${v}">${l}</option>`;}).join('')}</select><div id="m-rfields">${potRuleFieldsInner('pct',null)}</div>${foot('Add pot','savePot(false)')}</div>`;}
   else if(type==='edit-pot'){const p=S.pots.find(x=>x.id===id);if(!p)return;b.innerHTML=hdr('Edit \u00b7 '+p.name)+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" value="${p.name}">${L2('Balance (£)')}<input class="inp" id="m-bal" type="number" value="${p.current}">${L2('Funding rule')}<select class="inp" id="m-rtype" onchange="updatePotFields()">${['pct:% of each payment','fixed:Fixed amount per payment','target:Save to a target','priority:Priority shortfall','remainder:Remainder split'].map(x=>{const[v,l]=x.split(':');return`<option value="${v}" ${p.rule.type===v?'selected':''}>${l}</option>`;}).join('')}</select><div id="m-rfields">${potRuleFieldsInner(p.rule.type,p.rule)}</div>${foot('Save changes','savePot(true)')}</div>`;}
-  else if(type==='add-inc'){b.innerHTML=hdr('Add income source')+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" placeholder="e.g. Retainer, Wages">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number">${L2('Date')}<input class="inp" id="m-date" type="date" value="${td()}">${L2('Frequency')}<select class="inp" id="m-freq"><option value="one-off">One-off</option><option value="monthly">Monthly</option><option value="weekly">Weekly</option></select>${foot('Add','saveInc(false)')}</div>`;}
+  else if(type==='withdraw-pot'){const p=S.pots.find(x=>x.id===id);if(!p)return;b.innerHTML=hdr('Withdraw from '+p.name,'This will reduce the pot balance immediately.')+<div class="c g12"><div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:4px;"><span style="font-size:13px;color:var(--t2);">Available</span><span style="font-size:18px;font-weight:400;font-family:var(--fs);color:var(--t1);">£+fmt(p.current)+</span></div>+L2('Amount to withdraw (£)')+<input class="inp" id="m-wd-amt" type="number" placeholder="0.00" inputmode="decimal">+L2('Move to account (optional)')+<select class="inp" id="m-wd-acct"><option value="">Don't move — just reduce pot</option>+S.accounts.map(a=><option value="+a.id+">+a.name+</option>).join('')+</select>+foot('Withdraw','doWithdrawPot('+id+')')+'</div>';}
+else if(type==='add-inc'){b.innerHTML=hdr('Add income source')+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" placeholder="e.g. Retainer, Wages">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number">${L2('Date')}<input class="inp" id="m-date" type="date" value="${td()}">${L2('Frequency')}<select class="inp" id="m-freq"><option value="one-off">One-off</option><option value="monthly">Monthly</option><option value="weekly">Weekly</option></select>${foot('Add','saveInc(false)')}</div>`;}
   else if(type==='edit-inc'){const i=S.income.find(x=>x.id===id);if(!i)return;b.innerHTML=hdr('Edit \u00b7 '+i.name)+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" value="${i.name}">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number" value="${i.amount}">${L2('Date')}<input class="inp" id="m-date" type="date" value="${i.date}">${L2('Frequency')}<select class="inp" id="m-freq"><option value="one-off" ${i.freq==='one-off'?'selected':''}>One-off</option><option value="monthly" ${i.freq==='monthly'?'selected':''}>Monthly</option><option value="weekly" ${i.freq==='weekly'?'selected':''}>Weekly</option></select>${foot('Save changes','saveInc(true)')}</div>`;}
   else if(type==='add-exp'){b.innerHTML=hdr('Add expense')+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" placeholder="e.g. Rent, Van lease">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number">${L2('Day of month due')}<input class="inp" id="m-day" type="number" min="1" max="31" placeholder="1">${L2('Account')}<select class="inp" id="m-acct">${S.accounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select>${L2('Category')}<select class="inp" id="m-cat"><option value="household">Household</option><option value="business">Business</option><option value="personal">Personal</option></select>${foot('Add expense','saveExp(false)')}</div>`;}
   else if(type==='edit-exp'){const e=S.expenses.find(x=>x.id===id);if(!e)return;b.innerHTML=hdr('Edit \u00b7 '+e.name)+`<div class="c g12">${L2('Name')}<input class="inp" id="m-name" value="${e.name}">${L2('Amount (£)')}<input class="inp" id="m-amt" type="number" value="${e.amount}">${L2('Day of month due')}<input class="inp" id="m-day" type="number" min="1" max="31" value="${e.day}">${L2('Account')}<select class="inp" id="m-acct">${S.accounts.map(a=>`<option value="${a.id}" ${a.id===e.accountId?'selected':''}>${a.name}</option>`).join('')}</select>${L2('Category')}<select class="inp" id="m-cat"><option value="household" ${e.cat==='household'?'selected':''}>Household</option><option value="business" ${e.cat==='business'?'selected':''}>Business</option><option value="personal" ${e.cat==='personal'?'selected':''}>Personal</option></select>${foot('Save changes','saveExp(true)')}</div>`;}
@@ -790,7 +1063,7 @@ function renderBgPicker(){
   openModal('bg-picker');
 }
 
-function saveAcct(isEdit){const name=document.getElementById('m-name').value;const bal=parseFloat(document.getElementById('m-bal').value)||0;if(!name)return;if(isEdit){const ac=S.accounts.find(x=>x.id===_eid);if(!ac)return;ac.name=name;ac.balance=bal;}else{S.accounts.push({id:Date.now(),name,balance:bal,color:COLORS[cidx++%COLORS.length]});}closeModal();renderAll();}
+function saveAcct(isEdit){const name=document.getElementById('m-name').value;const bal=parseFloat(document.getElementById('m-bal').value)||0;if(!name)return;if(!S.balanceUpdated)S.balanceUpdated={};if(isEdit){const ac=S.accounts.find(x=>x.id===_eid);if(!ac)return;ac.name=name;ac.balance=bal;S.balanceUpdated[ac.id]=td();}else{const id=Date.now();S.accounts.push({id,name,balance:bal,color:COLORS[cidx++%COLORS.length]});S.balanceUpdated[id]=td();}closeModal();renderAll();}
 function savePot(isEdit){
   const name=document.getElementById('m-name').value;
   const bal=parseFloat(document.getElementById('m-bal').value)||0;
@@ -818,7 +1091,8 @@ function saveInc(isEdit){const name=document.getElementById('m-name').value;cons
 function saveExp(isEdit){const name=document.getElementById('m-name').value;const amt=parseFloat(document.getElementById('m-amt').value)||0;const day=parseInt(document.getElementById('m-day').value)||1;const accountId=parseInt(document.getElementById('m-acct').value);const cat=document.getElementById('m-cat').value;if(!name||!amt)return;if(isEdit){const e=S.expenses.find(x=>x.id===_eid);if(!e)return;e.name=name;e.amount=amt;e.day=day;e.accountId=accountId;e.cat=cat;}else{S.expenses.push({id:Date.now(),name,amount:amt,day,cat,accountId});}closeModal();renderAll();}
 function savePay(){const a=parseFloat(document.getElementById('ap-a').value)||0;if(!a)return;const acEl=document.getElementById('ap-acct');S.pending={amount:a,desc:document.getElementById('ap-d').value||'Payment',accountId:acEl?parseInt(acEl.value)||null:null,date:document.getElementById('ap-dt').value||td(),costs:parseFloat(document.getElementById('ap-c').value)||0,freq:document.getElementById('ap-f').value};closeModal();rAllocate();}
 function doMI(){const a=parseFloat(document.getElementById('m-amt').value)||0;const d=document.getElementById('m-desc').value||'Payment';if(!a)return;S.income.push({id:Date.now(),name:d,amount:a,date:td(),freq:'one-off',cat:'other'});S.pending={amount:a,desc:d,date:td(),costs:0,freq:'one-off'};closeModal();renderAll();go('allocate');}
-function doMO(){const a=parseFloat(document.getElementById('m-amt').value)||0;if(!a)return;if(S.accounts.length>0)S.accounts[0].balance=Math.max(0,S.accounts[0].balance-a);closeModal();renderAll();}
+function doMO(){const a=parseFloat(document.getElementById('m-amt').value)||0;if(!a)return;const acEl=document.getElementById('m-mo-acct');const acId=acEl?parseInt(acEl.value):S.accounts[0]?.id;const ac=S.accounts.find(x=>x.id===acId)||S.accounts[0];if(ac){ac.balance=Math.max(0,ac.balance-a);if(!S.balanceUpdated)S.balanceUpdated={};S.balanceUpdated[ac.id]=td();}closeModal();renderAll();}
+function doQuickSpend(){const a=parseFloat(document.getElementById('qs-amt').value)||0;if(!a)return;const acId=parseInt(document.getElementById('qs-acct').value);const ac=S.accounts.find(x=>x.id===acId);if(!ac)return;ac.balance=Math.max(0,ac.balance-a);if(!S.balanceUpdated)S.balanceUpdated={};S.balanceUpdated[ac.id]=td();document.getElementById('qs-amt').value='';renderAll();}
 function closeModal(){document.getElementById('modal').classList.remove('on');}
 
 function openAlert(msg){
@@ -830,7 +1104,17 @@ function openAlert(msg){
   document.getElementById('modal').classList.add('on');
 }
 function mbg(e){if(e.target===document.getElementById('modal'))closeModal();}
-function go(name){document.querySelectorAll('.sc').forEach(s=>s.classList.remove('on'));document.querySelectorAll('.nb').forEach(n=>n.classList.remove('on'));document.getElementById('sc-'+name).classList.add('on');document.getElementById('nav-'+name).classList.add('on');}
+const NAV_ORDER=['home','forecast','allocate','manage'];
+let _curScreen='home';
+function go(name){
+  const prev=_curScreen;_curScreen=name;
+  const dir=NAV_ORDER.indexOf(name)>=NAV_ORDER.indexOf(prev)?'right':'left';
+  document.querySelectorAll('.sc').forEach(s=>s.classList.remove('on','slide-in-right','slide-in-left'));
+  document.querySelectorAll('.nb').forEach(n=>n.classList.remove('on'));
+  const sc=document.getElementById('sc-'+name);
+  sc.classList.add('on',prev===name?'':'slide-in-'+(dir==='right'?'right':'left'));
+  document.getElementById('nav-'+name).classList.add('on');
+}
 function saveState(){
   const data = {
     accounts:S.accounts,
@@ -865,7 +1149,7 @@ function loadState(){
     if(d.income)S.income=d.income;
     if(d.expenses)S.expenses=d.expenses;
     if(d.pots)S.pots=d.pots;
-    S.pending=d.pending||null;
+    S.pending=d.pending||null;if(d.balanceUpdated)S.balanceUpdated=d.balanceUpdated;
   }catch(e){}
 }
 
