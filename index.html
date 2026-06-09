@@ -95,8 +95,8 @@ html,body{height:100%;overflow:hidden;touch-action:none;font-family:var(--ff);co
 .wchip.on{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.3);}
 .wchip-label{font-size:12px;font-weight:500;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .wchip-amt{font-size:11px;color:var(--t3);}
-.wdetail{display:none;margin-top:8px;background:rgba(255,255,255,.09);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);border:1px solid var(--bd);border-radius:14px;padding:14px 16px;}
-.wdetail.on{display:block;}
+.wdetail{display:block;max-height:0;overflow:hidden;opacity:0;margin-top:0;background:rgba(255,255,255,.09);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);border:1px solid transparent;border-radius:14px;padding:0 16px;transition:max-height 360ms cubic-bezier(0,1,.5,1),opacity 220ms ease,padding 360ms cubic-bezier(0,1,.5,1),margin-top 360ms ease,border-color 220ms ease;}
+.wdetail.on{max-height:900px;opacity:1;padding:14px 16px;margin-top:8px;border-color:var(--bd);}
 .wdrow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;}
 .wdrow+.wdrow{border-top:1px solid rgba(255,255,255,.08);}
 .home-next{padding:4px 20px 0;flex-shrink:0;}
@@ -142,6 +142,43 @@ select.inp option{background:rgba(15,18,28,.97);}
 .toggle-row{display:flex;gap:6px;}
 .toggle-opt{flex:1;padding:10px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.09);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--t2);font-size:13px;font-family:var(--ff);cursor:pointer;text-align:center;transition:all .15s;}
 .toggle-opt.on{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.32);color:var(--t1);}
+
+/* ── Animation system ── */
+/* Slide-out transitions (paired with existing slide-in) */
+@keyframes slideInRight{from{transform:translateX(22%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+@keyframes slideInLeft{from{transform:translateX(-22%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+@keyframes slideOutLeft{from{transform:translateX(0);opacity:1;}to{transform:translateX(-22%);opacity:0;}}
+@keyframes slideOutRight{from{transform:translateX(0);opacity:1;}to{transform:translateX(22%);opacity:0;}}
+.sc.slide-out-left{animation:slideOutLeft .28s cubic-bezier(.4,0,.2,1) both;}
+.sc.slide-out-right{animation:slideOutRight .28s cubic-bezier(.4,0,.2,1) both;}
+.sc.slide-in-right{animation:slideInRight .28s cubic-bezier(.4,0,.2,1) both;}
+.sc.slide-in-left{animation:slideInLeft .28s cubic-bezier(.4,0,.2,1) both;}
+/* Nav icon spring bounce */
+@keyframes navBounce{0%{transform:scale(1);}25%{transform:scale(.78);}65%{transform:scale(1.18);}100%{transform:scale(1);}}
+.nb-bounce > i{animation:navBounce 300ms cubic-bezier(.34,1.56,.64,1) both;}
+/* Nav label fade-up when active */
+@keyframes labelFadeUp{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:translateY(0);}}
+.nb.on > span{animation:labelFadeUp 200ms ease 60ms both;}
+/* Warning pill breathe — amber "short" pills only */
+@keyframes breathe{0%,100%{opacity:.82;}50%{opacity:1;}}
+.pwa{animation:breathe 2.5s ease-in-out infinite;}
+/* Delete/remove shake */
+@keyframes hz-shake{0%,100%{transform:translateX(0);}18%{transform:translateX(-6px);}36%{transform:translateX(6px);}54%{transform:translateX(-4px);}72%{transform:translateX(3px);}90%{transform:translateX(-1px);}}
+.hz-shake{animation:hz-shake 220ms ease both;}
+/* Ripple button */
+.hz-ripple-wrap{position:relative;overflow:hidden;}
+.hz-ripple{position:absolute;border-radius:50%;pointer-events:none;transform:scale(0);animation:hz-ripple-anim 500ms cubic-bezier(.4,0,.2,1) forwards;}
+@keyframes hz-ripple-anim{to{transform:scale(4.5);opacity:0;}}
+/* Wdetail row stagger */
+@keyframes wdrowIn{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:translateY(0);}}
+/* Home load sequence */
+@keyframes hzFadeSlideDown{from{opacity:0;transform:translateY(-10px);}to{opacity:1;transform:translateY(0);}}
+@keyframes hzFadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+@keyframes hzScaleIn{from{opacity:0;transform:scale(.88);}to{opacity:1;transform:scale(1);}}
+/* Reduced motion: kill everything */
+@media(prefers-reduced-motion:reduce){
+  *,::before,::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;}
+}
 </style>
 </head>
 <body>
@@ -155,7 +192,7 @@ select.inp option{background:rgba(15,18,28,.97);}
       <div></div>
       <div class="topbar-btns" style="align-items:center;gap:8px;">
         <div id="sync-dot" style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.2);flex-shrink:0;transition:background .4s;"></div>
-        <button class="icon-btn gr" onclick="openModal('mi')" title="Money In"><i class="ti ti-arrow-down-circle"></i></button>
+        <button class="icon-btn gr hz-ripple-wrap" onclick="rippleFrom(this,event);openModal('mi')" title="Money In"><i class="ti ti-arrow-down-circle"></i></button>
         <button class="icon-btn wa" onclick="openModal('mo')" title="Money Out"><i class="ti ti-arrow-up-circle"></i></button>
         <button class="icon-btn" onclick="openModal('bg-picker')" style="color:rgba(255,255,255,.5);"><i class="ti ti-photo"></i></button>
       </div>
@@ -371,7 +408,7 @@ function rHome() {
       +'<div style="display:flex;align-items:center;gap:8px;">'
       +'<div style="width:6px;height:6px;border-radius:50%;background:'+ac.color+';opacity:.9;flex-shrink:0;"></div>'
       +'<span>'+ac.name+'</span><span style="color:var(--t3);">·</span>'
-      +'<span class="acct-bal">£'+fmt(ac.balance)+'</span></div>'
+      +'<span class="acct-bal" data-roll-id="a'+ac.id+'" data-roll-val="'+ac.balance+'">£'+fmt(ac.balance)+'</span></div>'
       +(fresh?'<span style="font-size:10px;color:var(--t3);padding-left:14px;">'+fresh+'</span>':'')
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:8px;">'
@@ -420,6 +457,7 @@ function tChip(i,s) {
   const rows=s.acctBreaks.map(pb=>'<div class="wdrow"><div style="display:flex;align-items:center;gap:8px;"><div style="width:6px;height:6px;border-radius:50%;background:'+pb.color+';opacity:.85;"></div><span style="font-size:13px;color:var(--t2);">'+pb.name+' · '+pb.items.join(', ')+'</span></div><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:500;">£'+fmt(pb.total)+'</span><div class="pill" style="font-size:10px;padding:2px 7px;background:'+(pb.covered?'var(--grg)':'var(--wag)')+';color:'+(pb.covered?'var(--gr)':'var(--wa)')+';border:1px solid '+(pb.covered?'var(--grb)':'var(--wab)')+';">'+(pb.covered?'OK':'£'+fmt(pb.shortBy)+' short')+'</div></div></div>').join('');
   det.innerHTML='<p style="font-size:11px;color:var(--t3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">'+s.label+' · '+s.dateRange+'</p>'+rows+'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);" class="wdrow"><span style="font-size:13px;color:var(--t3);">Total going out</span><span style="font-size:13px;font-weight:500;">£'+fmt(s.total)+'</span></div>';
   det.classList.add('on');
+  _wStagger(det);
   setTimeout(()=>det.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
 }
 
@@ -526,9 +564,10 @@ function rAllocate() {
     +acctSection+potSection
     +'<div style="padding:16px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);"><div class="r"><div><p style="font-size:13px;color:var(--t2);margin-bottom:4px;">③ Yours to spend</p><p style="font-size:12px;color:var(--t3);">After all suggestions above</p></div><p style="font-size:28px;font-weight:300;font-family:var(--fs);color:var(--gr);" id="alloc-remainder">£'+fmt(initialRem)+'</p></div></div>'
     +'<p style="font-size:11px;color:rgba(255,255,255,.3);text-align:center;line-height:1.6;padding:0 8px;">These are suggestions only. Adjust any amount before confirming. Always make financial decisions based on your own circumstances.</p>'
-    +'<button class="chip chip-solid chip-full" onclick="confirmAlloc()">Confirm — move money →</button>';
+    +'<button class="chip chip-solid chip-full hz-ripple-wrap" onclick="doConfirmAlloc(event)">Confirm — move money →</button>';
 }
 
+function doConfirmAlloc(e){ rippleFrom(e.currentTarget,e); hapDbl(); confirmAlloc(); }
 function confirmAlloc() {
   const p=S.pending; if(!p) return;
   const r=smartAlloc(p.amount,p.costs||0);
@@ -563,7 +602,7 @@ function rManage() {
   };
   if (t==='accounts') {
     el.innerHTML=S.accounts.map(ac=>{ const exp=acctExpenses(ac.id); const cov=acctCovered(ac); const short=acctShort(ac);
-      return '<div class="glass"><div class="r" style="margin-bottom:12px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:10px;height:10px;border-radius:50%;background:'+ac.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+ac.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(ac.balance)+'</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Monthly expenses</p><p style="font-size:13px;font-weight:500;color:var(--t1);">£'+fmt(exp)+'/mo</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Status</p>'+(cov?'<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Covered</div>':'<div class="pill pwa" style="font-size:10px;">£'+fmt(short)+' short</div>')+'</div><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'account\','+ac.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(ac.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(ac.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:8px;"><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-acct\','+ac.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="flex:1;" onclick="delAcct('+ac.id+')"><i class="ti ti-trash" style="font-size:13px;"></i>Remove</button></div></div>';
+      return '<div class="glass"><div class="r" style="margin-bottom:12px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:10px;height:10px;border-radius:50%;background:'+ac.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+ac.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(ac.balance)+'</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Monthly expenses</p><p style="font-size:13px;font-weight:500;color:var(--t1);">£'+fmt(exp)+'/mo</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Status</p>'+(cov?'<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Covered</div>':'<div class="pill pwa" style="font-size:10px;">£'+fmt(short)+' short</div>')+'</div><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'account\','+ac.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(ac.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(ac.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:8px;"><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-acct\','+ac.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="flex:1;" onclick="shakeAndDel(this,()=>delAcct('+ac.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i>Remove</button></div></div>';
     }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-acct\')"><i class="ti ti-plus"></i>Add account</button><div style="margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,.1);"><p style="font-size:11px;color:rgba(255,255,255,.3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Danger zone</p><button class="chip" style="width:100%;justify-content:center;border-color:rgba(248,113,113,.3);color:rgba(248,113,113,.8);background:rgba(248,113,113,.08);" onclick="clearAllData()"><i class="ti ti-trash"></i>Delete all data and start fresh</button></div>';
   } else if (t==='pots') {
     const potTotal=S.pots.reduce((a,p)=>a+p.current,0);
@@ -572,12 +611,12 @@ function rManage() {
     const pctMsg=totalPct>100?'Over-allocated by '+(totalPct-100)+'% — reduce a pot first':totalPct===100?'✔ Fully allocated — 100% assigned':totalPct>0?totalPct+'% assigned · '+(100-totalPct)+'% free':'No percentage pots set up yet';
     const potTotalCard='<div style="padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">Total in pots</p><p style="font-size:16px;font-weight:500;color:var(--t1);font-family:var(--fs);">£'+fmt(potTotal)+'</p></div>';
     const pctBar='<div style="padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">% pots total</p><p style="font-size:12px;font-weight:600;color:'+pctColor+';">'+pctMsg+'</p></div>';
-    const potCards=S.pots.map(p=>'<div class="glass"><div class="r" style="margin-bottom:'+(p.rule.target?14:10)+'px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p><p style="font-size:12px;color:var(--t3);margin-top:2px;">'+rd(p.rule)+'</p></div></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div>'+(p.rule.target?'<div class="btr" style="margin-bottom:8px;"><div class="bfill" style="width:'+Math.min(100,Math.round(p.current/p.rule.target*100))+'%;background:'+p.color+';"></div></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">'+Math.min(100,Math.round(p.current/p.rule.target*100))+'% towards £'+fmt(p.rule.target)+'</p>':'<div style="height:6px;"></div>')+'<div class="r" style="margin-bottom:10px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="delPot('+p.id+')"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
+    const potCards=S.pots.map(p=>'<div class="glass"><div class="r" style="margin-bottom:'+(p.rule.target?14:10)+'px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p><p style="font-size:12px;color:var(--t3);margin-top:2px;">'+rd(p.rule)+'</p></div></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div>'+(p.rule.target?'<div class="btr" style="margin-bottom:8px;"><div class="bfill" style="width:'+Math.min(100,Math.round(p.current/p.rule.target*100))+'%;background:'+p.color+';"></div></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">'+Math.min(100,Math.round(p.current/p.rule.target*100))+'% towards £'+fmt(p.rule.target)+'</p>':'<div style="height:6px;"></div>')+'<div class="r" style="margin-bottom:10px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delPot('+p.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
     el.innerHTML=potTotalCard+pctBar+potCards+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-pot\')"><i class="ti ti-plus"></i>Add pot</button>';
   } else if (t==='income') {
-    el.innerHTML=S.income.map(i=>'<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+i.name+'</p><p style="font-size:12px;color:var(--t3);">'+i.cat+' · '+i.freq+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+£'+fmt(i.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-inc\','+i.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="delInc('+i.id+')"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>').join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-inc\')"><i class="ti ti-plus"></i>Add income source</button>';
+    el.innerHTML=S.income.map(i=>'<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+i.name+'</p><p style="font-size:12px;color:var(--t3);">'+i.cat+' · '+i.freq+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+£'+fmt(i.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-inc\','+i.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delInc('+i.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>').join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-inc\')"><i class="ti ti-plus"></i>Add income source</button>';
   } else if (t==='expenses') {
-    el.innerHTML=S.expenses.map(e=>{ const ac=S.accounts.find(a=>a.id===e.accountId); const ef=e.freq||'monthly'; const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; const eWhen=ef==='weekly'?'Every '+DOW[e.dow??1]:ef==='termly'?'Termly · '+(e.termDate||'date not set'):'Monthly · day '+(e.day||1); return '<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+e.name+'</p><p style="font-size:12px;color:var(--t3);">'+(ac?ac.name:'Unassigned')+' · '+eWhen+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:15px;color:rgba(255,255,255,.45);">-£'+fmt(e.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-exp\','+e.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="delExp('+e.id+')"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>'; }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-exp\')"><i class="ti ti-plus"></i>Add expense</button>';
+    el.innerHTML=S.expenses.map(e=>{ const ac=S.accounts.find(a=>a.id===e.accountId); const ef=e.freq||'monthly'; const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; const eWhen=ef==='weekly'?'Every '+DOW[e.dow??1]:ef==='termly'?'Termly · '+(e.termDate||'date not set'):'Monthly · day '+(e.day||1); return '<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+e.name+'</p><p style="font-size:12px;color:var(--t3);">'+(ac?ac.name:'Unassigned')+' · '+eWhen+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:15px;color:rgba(255,255,255,.45);">-£'+fmt(e.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-exp\','+e.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delExp('+e.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>'; }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-exp\')"><i class="ti ti-plus"></i>Add expense</button>';
   }
 }
 
@@ -702,7 +741,42 @@ function mbg(e){ if(e.target===document.getElementById('modal')) closeModal(); }
 
 const NAV_ORDER=['home','forecast','allocate','manage'];
 let _curScreen='home';
-function go(name){ const prev=_curScreen; _curScreen=name; const dir=NAV_ORDER.indexOf(name)>=NAV_ORDER.indexOf(prev)?'right':'left'; document.querySelectorAll('.sc').forEach(s=>s.classList.remove('on','slide-in-right','slide-in-left')); document.querySelectorAll('.nb').forEach(n=>n.classList.remove('on')); const sc=document.getElementById('sc-'+name); sc.classList.add('on',prev===name?'':'slide-in-'+(dir==='right'?'right':'left')); document.getElementById('nav-'+name).classList.add('on'); }
+function go(name){
+  hap(8);
+  const prev=_curScreen; _curScreen=name;
+  // Nav icon bounce
+  const navEl=document.getElementById('nav-'+name);
+  if(navEl){navEl.classList.remove('nb-bounce');void navEl.offsetWidth;navEl.classList.add('nb-bounce');setTimeout(()=>navEl.classList.remove('nb-bounce'),320);}
+  // Update nav active state
+  document.querySelectorAll('.nb').forEach(n=>n.classList.remove('on'));
+  if(navEl) navEl.classList.add('on');
+  // No animation if same screen or reduced motion
+  if(prev===name||_RM()){
+    document.querySelectorAll('.sc').forEach(s=>s.classList.remove('on','slide-in-right','slide-in-left','slide-out-left','slide-out-right'));
+    document.getElementById('sc-'+name).classList.add('on');
+    return;
+  }
+  const dir=NAV_ORDER.indexOf(name)>=NAV_ORDER.indexOf(prev)?'right':'left';
+  const outCls=dir==='right'?'slide-out-left':'slide-out-right';
+  const inCls=dir==='right'?'slide-in-right':'slide-in-left';
+  const prevSc=document.getElementById('sc-'+prev);
+  const nextSc=document.getElementById('sc-'+name);
+  // Briefly absolute-position both so they layer during animation
+  const abs='position:absolute;top:0;left:0;right:0;bottom:0;';
+  prevSc.style.cssText+=abs; prevSc.style.zIndex='1';
+  nextSc.style.cssText+=abs; nextSc.style.zIndex='2';
+  // Hide all other screens
+  document.querySelectorAll('.sc').forEach(s=>{if(s!==prevSc&&s!==nextSc)s.classList.remove('on','slide-in-right','slide-in-left','slide-out-left','slide-out-right');});
+  // Animate out old, in new
+  prevSc.classList.add(outCls);
+  nextSc.classList.remove('slide-in-right','slide-in-left','slide-out-left','slide-out-right');
+  nextSc.classList.add('on',inCls);
+  // Clean up after animation
+  setTimeout(()=>{
+    prevSc.classList.remove('on',outCls);
+    [prevSc,nextSc].forEach(s=>{s.style.position='';s.style.top='';s.style.left='';s.style.right='';s.style.bottom='';s.style.zIndex='';});
+  },300);
+}
 
 function saveState(){
   const data={accounts:S.accounts,income:S.income,expenses:S.expenses,pots:S.pots,pending:S.pending||null,balanceUpdated:S.balanceUpdated||{}};
@@ -718,13 +792,145 @@ function loadState(){
   try{ const raw=localStorage.getItem('hz_data'); if(!raw) return; const d=JSON.parse(raw); if(d.accounts&&d.accounts.length) S.accounts=d.accounts; if(d.income) S.income=d.income; if(d.expenses) S.expenses=d.expenses; if(d.pots) S.pots=d.pots; S.pending=d.pending||null; if(d.balanceUpdated) S.balanceUpdated=d.balanceUpdated; }catch(e){}
 }
 function clearAllData(){ const b=document.getElementById('mbody'); b.innerHTML='<p style="font-size:22px;font-weight:300;font-family:var(--fs);color:var(--t1);margin-bottom:8px;">Delete all data?</p><p style="font-size:14px;color:var(--t2);margin-bottom:24px;line-height:1.6;">This will wipe everything. There\'s no undo.</p><div style="display:flex;gap:8px;"><button class="chip" style="flex:1;justify-content:center;" onclick="closeModal()">Cancel</button><button class="chip" style="flex:1;justify-content:center;background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.35);color:rgba(248,113,113,.9);" onclick="confirmDelete()">Yes, delete everything</button></div>'; document.getElementById('modal').classList.add('on'); }
-function confirmDelete(){ localStorage.removeItem('hz_data'); closeModal(); location.reload(); }
+function confirmDelete(){ hapDbl(); localStorage.removeItem('hz_data'); closeModal(); location.reload(); }
 
-function renderAll(){ rHome(); rForecast(); rAllocate(); rManage(); saveState(); }
+function renderAll(){ rHome(); rForecast(); rAllocate(); rManage(); saveState(); _animateBals(); }
 window.renderAll=renderAll;
 loadState();
 document.getElementById('bg').style.backgroundImage='url('+BG_URL+')';
 renderAll();
+
+// ════════════════════════════════════════════
+// ANIMATION SYSTEM — pure animation/haptic code
+// No data, logic, or layout changes below
+// ════════════════════════════════════════════
+
+// ── Reduced motion helper ──
+function _RM(){ return window.matchMedia('(prefers-reduced-motion:reduce)').matches; }
+
+// ── Haptic feedback ──
+function hap(pattern){
+  if(_RM()) return;
+  if(!navigator.vibrate) return;
+  navigator.vibrate(pattern);
+}
+function hapDbl(){ hap([25,50,25]); }
+
+// ── Global haptic delegation (chip/button = 12ms, nav handled in go()) ──
+document.addEventListener('touchstart', function(e){
+  if(_RM()) return;
+  const t=e.target;
+  if(t.closest('.chip,.icon-btn,.wchip,.tab,.toggle-opt') && !t.closest('.nb')){
+    hap(12);
+  }
+}, {passive:true});
+
+// ── Ripple ──
+function rippleFrom(el, e){
+  if(_RM()) return;
+  const r=el.getBoundingClientRect();
+  const x=(e&&e.touches?e.touches[0].clientX:e&&e.clientX!=null?e.clientX:r.left+r.width/2)-r.left;
+  const y=(e&&e.touches?e.touches[0].clientY:e&&e.clientY!=null?e.clientY:r.top+r.height/2)-r.top;
+  const sz=Math.max(r.width,r.height)*1.8;
+  const rpl=document.createElement('div');
+  rpl.className='hz-ripple';
+  rpl.style.cssText='width:'+sz+'px;height:'+sz+'px;left:'+(x-sz/2)+'px;top:'+(y-sz/2)+'px;background:rgba(255,255,255,.22);';
+  el.appendChild(rpl);
+  rpl.addEventListener('animationend',()=>rpl.remove(),{once:true});
+}
+
+// ── Shake + delete ──
+function shakeAndDel(btn, fn){
+  hapDbl();
+  if(_RM()){ fn(); return; }
+  const card=btn.closest('.glass,.glass-sm,.fwc');
+  if(!card){ fn(); return; }
+  card.classList.remove('hz-shake');
+  void card.offsetWidth; // reflow to reset
+  card.classList.add('hz-shake');
+  card.addEventListener('animationend',()=>{ card.classList.remove('hz-shake'); fn(); },{once:true});
+}
+
+// ── Number roll animation ──
+const _prevBals={};
+function rollNum(el, from, to, dur){
+  if(_RM()){ el.textContent='£'+Math.round(to).toLocaleString('en-GB'); return; }
+  const start=performance.now();
+  const diff=to-from;
+  function step(now){
+    const t=Math.min(1,(now-start)/dur);
+    // ease out cubic
+    const eased=1-Math.pow(1-t,3);
+    el.textContent='£'+Math.round(from+diff*eased).toLocaleString('en-GB');
+    if(t<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+function _animateBals(){
+  if(_RM()) return;
+  document.querySelectorAll('[data-roll-id]').forEach(el=>{
+    const id=el.dataset.rollId;
+    const to=parseFloat(el.dataset.rollVal)||0;
+    const from=_prevBals[id]!==undefined?_prevBals[id]:to;
+    if(Math.abs(to-from)>0.5) rollNum(el,from,to,400);
+    _prevBals[id]=to;
+  });
+}
+
+// ── Week detail row stagger ──
+function _wStagger(det){
+  if(_RM()) return;
+  const rows=det.querySelectorAll('.wdrow');
+  rows.forEach((r,i)=>{
+    r.style.opacity='0';
+    r.style.animation='none';
+    // slight delay to let max-height transition start first
+    setTimeout(()=>{
+      r.style.opacity='';
+      r.style.animation='wdrowIn 220ms ease '+(i*42)+'ms both';
+    },40);
+  });
+}
+
+// ── Home load sequence (fires once on first page open) ──
+let _homeLoaded=false;
+function _homeLoadSeq(){
+  if(_homeLoaded||_RM()) return;
+  _homeLoaded=true;
+  // 1. Background fade in
+  const bg=document.getElementById('bg');
+  bg.style.opacity='0';
+  bg.style.transition='opacity 500ms ease';
+  requestAnimationFrame(()=>{ bg.style.opacity='1'; });
+  // 2. Greeting slides in (150ms delay)
+  const gr=document.getElementById('hgreeting');
+  if(gr){
+    gr.style.opacity='0';
+    gr.style.transform='translateY(-10px)';
+    gr.style.transition='opacity 380ms ease 150ms, transform 380ms cubic-bezier(.34,1.1,.64,1) 150ms';
+    requestAnimationFrame(()=>{ gr.style.opacity='1'; gr.style.transform='translateY(0)'; });
+  }
+  // 3. Account strips cascade (300ms start, 60ms apart)
+  setTimeout(()=>{
+    document.querySelectorAll('#haccts .acct-strip').forEach((s,i)=>{
+      s.style.opacity='0';
+      s.style.transform='translateY(14px)';
+      s.style.transition='opacity 300ms ease '+(i*60)+'ms, transform 300ms cubic-bezier(.34,1.1,.64,1) '+(i*60)+'ms';
+      requestAnimationFrame(()=>{ s.style.opacity='1'; s.style.transform='translateY(0)'; });
+    });
+  },300);
+  // 4. Week chips scale in (500ms start, 80ms apart)
+  setTimeout(()=>{
+    document.querySelectorAll('.wchip').forEach((c,i)=>{
+      c.style.opacity='0';
+      c.style.transform='scale(.88)';
+      c.style.transition='opacity 280ms ease '+(i*80)+'ms, transform 280ms cubic-bezier(.34,1.56,.64,1) '+(i*80)+'ms';
+      requestAnimationFrame(()=>{ c.style.opacity='1'; c.style.transform='scale(1)'; });
+    });
+  },500);
+}
+// Fire load sequence shortly after first render
+setTimeout(_homeLoadSeq, 80);
 </script>
 </body>
 </html>
