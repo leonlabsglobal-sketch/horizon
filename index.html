@@ -268,7 +268,6 @@ select.inp option{background:rgba(15,18,28,.97);}
     <div class="chips3" id="hwks"></div>
     <div class="wdetail" id="wdetail"></div>
   </div>
-  <div class="home-next" id="hinc"></div>
 </div>
 
 <!-- FORECAST -->
@@ -530,17 +529,9 @@ function rHome() {
   document.getElementById('wdetail').innerHTML='';
   S.openChip=-1;
 
-  // Next income strip — clean up stale one-offs
+  // Clean up stale one-offs
   const t=td();
   S.income=S.income.filter(i=>i.freq!=='one-off'||i.date>=t);
-  const ni=S.income.filter(i=>i.date>=t).sort((a,b)=>a.date.localeCompare(b.date))[0];
-  const el=document.getElementById('hinc');
-  if (ni) {
-    const days=Math.max(0,Math.round((new Date(ni.date)-N())/86400000));
-    const ds=days===0?'today':days===1?'tomorrow':'in '+days+' days';
-    const showPlan=!!S.pending;
-    el.innerHTML='<div class="next-strip"><div class="c g4"><span style="font-size:16px;font-weight:500;color:var(--gr);font-family:var(--fs);">+£'+fmt(ni.amount)+'</span><span style="font-size:12px;color:var(--t3);">'+ni.name+' · '+ds+'</span></div>'+(showPlan?'<button class="chip chip-sm" onclick="go(\'allocate\')" style="font-size:12px;">Plan →</button>':'<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Planned</div>')+'</div>';
-  } else { el.innerHTML=''; }
 }
 
 function tChip(i,s) {
@@ -655,26 +646,27 @@ function smartAlloc(gross, costs) {
     if (exp>0) acctItems.push({uid:'acct-'+ac.id,name:ac.name,color:ac.color,suggested:Math.round(short),note:short>0?'Short by £'+fmt(short)+' against monthly bills':'Currently covered — top up optional',isCovered:short===0,accountId:ac.id});
   });
   const acctTotal=acctItems.reduce((a,i)=>a+i.suggested,0);
-  let remForPots=Math.max(0,net-acctTotal);
+  // Pot suggestions are based on the full net payment, not what's left after accounts.
+  // This way suggestions always reflect the rule — the user adjusts as needed.
   const ord={priority:0,pct:1,fixed:2,target:3,remainder:4};
   const potItems=[];
+  let remTrack=Math.max(0,net-acctTotal); // track remainder for remainder-type pots only
   [...S.pots].filter(p=>p.rule.type!=='remainder').sort((a,b)=>ord[a.rule.type]-ord[b.rule.type]).forEach(p=>{
     const r=p.rule; let suggested=0,note='',skip=false;
-    if (r.type==='priority'){const fv=r.fundingType==='pct'?net*r.fundingValue/100:r.fundingValue||0;const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Already at target';}else{suggested=Math.round(Math.min(fv||need,need,remForPots));note='Fill first — up to £'+fmt(r.target)+' target';}}
-    else if(r.type==='pct'){const raw=Math.round(net*r.value/100);suggested=Math.min(r.accountLimit?Math.min(raw,r.accountLimit):raw,remForPots);note=r.value+'% of incoming payment'+(r.accountLimit?' (max £'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='fixed'){suggested=Math.min(r.accountLimit?Math.min(r.value,r.accountLimit):r.value,remForPots);note='£'+fmt(r.value)+' each payment'+(r.accountLimit?' (max £'+fmt(r.accountLimit)+')':'');}
-    else if(r.type==='target'){const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Target reached';}else{const fv=r.fundingType==='pct'?Math.round(net*r.fundingValue/100):r.fundingValue||0;suggested=Math.round(Math.min(fv,need,remForPots));note=Math.min(100,Math.round(p.current/r.target*100))+'% towards £'+fmt(r.target)+' goal';}}
-    if (!skip) remForPots=Math.max(0,remForPots-suggested);
+    if (r.type==='priority'){const fv=r.fundingType==='pct'?net*r.fundingValue/100:r.fundingValue||0;const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Already at target';}else{suggested=Math.round(Math.min(fv||need,need));note='Fill first — up to £'+fmt(r.target)+' target';}}
+    else if(r.type==='pct'){const raw=Math.round(net*r.value/100);suggested=r.accountLimit?Math.min(raw,r.accountLimit):raw;note=r.value+'% of incoming payment'+(r.accountLimit?' (max £'+fmt(r.accountLimit)+')':'');}
+    else if(r.type==='fixed'){suggested=r.accountLimit?Math.min(r.value,r.accountLimit):r.value;note='£'+fmt(r.value)+' each payment'+(r.accountLimit?' (max £'+fmt(r.accountLimit)+')':'');}
+    else if(r.type==='target'){const need=Math.max(0,r.target-p.current);if(need<=0){skip=true;note='Target reached';}else{const fv=r.fundingType==='pct'?Math.round(net*r.fundingValue/100):r.fundingValue||0;suggested=Math.round(Math.min(fv,need));note=Math.min(100,Math.round(p.current/r.target*100))+'% towards £'+fmt(r.target)+' goal';}}
+    if(!skip) remTrack=Math.max(0,remTrack-suggested);
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested,note,skip,pot:p});
   });
   const remPots=S.pots.filter(p=>p.rule.type==='remainder');
   const totalRemPct=remPots.reduce((a,p)=>a+p.rule.value,0);
-  const remAtStart=remForPots;
+  const remAtStart=remTrack;
   remPots.forEach(p=>{
     const share=totalRemPct>0?Math.round(remAtStart*(p.rule.value/totalRemPct)):0;
-    const suggested=Math.min(share,remForPots);
-    remForPots=Math.max(0,remForPots-suggested);
-    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested,note:p.rule.value+'% of what remains after other pots',skip:false,pot:p});
+    remTrack=Math.max(0,remTrack-share);
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:share,note:p.rule.value+'% of what remains after other pots',skip:false,pot:p});
   });
   return {net,acctItems,potItems};
 }
