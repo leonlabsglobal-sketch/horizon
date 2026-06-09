@@ -55,16 +55,14 @@
   --wa:#E8B86D;--wag:rgba(232,184,109,.13);--wab:rgba(232,184,109,.38);
   --am:#F5C842;--amg:rgba(245,200,66,.13);--amb:rgba(245,200,66,.32);
 }
+*{-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;touch-action:none;font-family:var(--ff);color:var(--t1);-webkit-font-smoothing:antialiased;background:#080c10;}
 .app{max-width:390px;margin:0 auto;height:100%;height:100dvh;overflow:hidden;position:relative;}
 .bg{position:fixed;inset:0;max-width:390px;margin:0 auto;z-index:0;background-size:cover;background-position:center top;background-repeat:no-repeat;}
 .bg::after{content:'';position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,8,.42) 0%,rgba(0,0,8,.28) 55%,rgba(0,0,8,.52) 100%);pointer-events:none;}
-.sc{display:none;flex-direction:column;height:100%;overflow:hidden;position:relative;z-index:1;}
+/* Screens: absolutely stacked so only .on is visible; no bleed during transitions */
+.sc{display:none;flex-direction:column;position:absolute;inset:0;overflow:hidden;z-index:1;}
 .sc.on{display:flex;}
-.sc.slide-in-right{animation:slideInRight .28s cubic-bezier(.32,.72,0,1) both;}
-.sc.slide-in-left{animation:slideInLeft .28s cubic-bezier(.32,.72,0,1) both;}
-@keyframes slideInRight{from{transform:translateX(18%);opacity:0;}to{transform:translateX(0);opacity:1;}}
-@keyframes slideInLeft{from{transform:translateX(-18%);opacity:0;}to{transform:translateX(0);opacity:1;}}
 .home-hero{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;padding:0 24px 6px;min-height:0;}
 .home-topbar{display:flex;justify-content:space-between;align-items:flex-start;padding-top:44px;position:relative;z-index:2;margin-bottom:4px;}
 .topbar-btns{display:flex;gap:8px;padding-top:2px;}
@@ -143,39 +141,88 @@ select.inp option{background:rgba(15,18,28,.97);}
 .toggle-opt{flex:1;padding:10px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.09);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--t2);font-size:13px;font-family:var(--ff);cursor:pointer;text-align:center;transition:all .15s;}
 .toggle-opt.on{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.32);color:var(--t1);}
 
-/* ── Animation system ── */
-/* Slide-out transitions (paired with existing slide-in) */
-@keyframes slideInRight{from{transform:translateX(22%);opacity:0;}to{transform:translateX(0);opacity:1;}}
-@keyframes slideInLeft{from{transform:translateX(-22%);opacity:0;}to{transform:translateX(0);opacity:1;}}
-@keyframes slideOutLeft{from{transform:translateX(0);opacity:1;}to{transform:translateX(-22%);opacity:0;}}
-@keyframes slideOutRight{from{transform:translateX(0);opacity:1;}to{transform:translateX(22%);opacity:0;}}
-.sc.slide-out-left{animation:slideOutLeft .28s cubic-bezier(.4,0,.2,1) both;}
-.sc.slide-out-right{animation:slideOutRight .28s cubic-bezier(.4,0,.2,1) both;}
-.sc.slide-in-right{animation:slideInRight .28s cubic-bezier(.4,0,.2,1) both;}
-.sc.slide-in-left{animation:slideInLeft .28s cubic-bezier(.4,0,.2,1) both;}
-/* Nav icon spring bounce */
+/* ══════════════════════════════════════
+   ANIMATION SYSTEM
+   ══════════════════════════════════════ */
+
+/* ── Page transitions: incoming only slides in, outgoing fades+scales back ── */
+/* Old screen fades into background, new screen slides in cleanly — no bleed */
+.sc.sc-out{animation:scOut .28s cubic-bezier(.4,0,.2,1) both;}
+.sc.sc-in-r{animation:scInR .28s cubic-bezier(.4,0,.2,1) both;}
+.sc.sc-in-l{animation:scInL .28s cubic-bezier(.4,0,.2,1) both;}
+@keyframes scOut{from{opacity:1;transform:scale(1);}to{opacity:0;transform:scale(.97);}}
+@keyframes scInR{from{transform:translateX(24%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+@keyframes scInL{from{transform:translateX(-24%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+
+/* ── Nav icon spring bounce (targets svg, not i) ── */
 @keyframes navBounce{0%{transform:scale(1);}25%{transform:scale(.78);}65%{transform:scale(1.18);}100%{transform:scale(1);}}
-.nb-bounce > i{animation:navBounce 300ms cubic-bezier(.34,1.56,.64,1) both;}
+.nb-bounce > .nbi{animation:navBounce 300ms cubic-bezier(.34,1.56,.64,1) both;}
 /* Nav label fade-up when active */
 @keyframes labelFadeUp{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:translateY(0);}}
 .nb.on > span{animation:labelFadeUp 200ms ease 60ms both;}
-/* Warning pill breathe — amber "short" pills only */
+
+/* ── Inline SVG nav icons ── */
+.nbi{width:22px;height:22px;display:block;flex-shrink:0;}
+
+/* HOME — door fills and opens on active */
+.ni-door{
+  transition:fill .25s ease,transform .32s cubic-bezier(.34,1.2,.64,1);
+  transform-box:fill-box;transform-origin:left center;
+  fill:transparent;
+}
+.nb.on .ni-door{fill:rgba(255,255,255,.55);transform:scaleX(0.18);}
+
+/* FORECAST — line draws from base to tip on active */
+.ni-line{stroke-dasharray:23;stroke-dashoffset:23;}
+.ni-arr{stroke-dasharray:11;stroke-dashoffset:11;}
+.nb.on .ni-line{animation:drawLine 360ms cubic-bezier(.4,0,.2,1) forwards;}
+.nb.on .ni-arr{animation:drawArr 260ms cubic-bezier(.4,0,.2,1) 180ms forwards;}
+@keyframes drawLine{from{stroke-dashoffset:23;}to{stroke-dashoffset:0;}}
+@keyframes drawArr{from{stroke-dashoffset:11;}to{stroke-dashoffset:0;}}
+/* Inactive: fully drawn, dimmer */
+.nb:not(.on) .ni-line,.nb:not(.on) .ni-arr{stroke-dashoffset:0;}
+
+/* ALLOCATE — note peeks up out of wallet */
+.ni-note{
+  transform-box:fill-box;transform-origin:center bottom;
+  transform:translateY(5px) scaleY(0.3);opacity:0;
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1),opacity .2s ease;
+  fill:rgba(255,255,255,.2);stroke:currentColor;
+}
+.nb.on .ni-note{transform:translateY(0) scaleY(1);opacity:1;}
+/* Coin turns gold on active */
+.ni-coin{transition:fill .25s ease,stroke .25s ease;}
+.nb.on .ni-coin{fill:rgba(245,200,66,.7);stroke:#F5C842;}
+
+/* MANAGE — slider knobs move to new positions and fill */
+.ni-s1,.ni-s2,.ni-s3{
+  fill:transparent;
+  transition:transform .32s cubic-bezier(.34,1.56,.64,1),fill .2s ease;
+  transition-delay:0ms,0ms;
+}
+.ni-s2{transition-delay:50ms,50ms;}
+.ni-s3{transition-delay:100ms,100ms;}
+.nb.on .ni-s1{transform:translateX(5px);fill:currentColor;}
+.nb.on .ni-s2{transform:translateX(-5px);fill:currentColor;}
+.nb.on .ni-s3{transform:translateX(4px);fill:currentColor;}
+
+/* ── Warning pill breathe ── */
 @keyframes breathe{0%,100%{opacity:.82;}50%{opacity:1;}}
 .pwa{animation:breathe 2.5s ease-in-out infinite;}
-/* Delete/remove shake */
+
+/* ── Delete/remove shake ── */
 @keyframes hz-shake{0%,100%{transform:translateX(0);}18%{transform:translateX(-6px);}36%{transform:translateX(6px);}54%{transform:translateX(-4px);}72%{transform:translateX(3px);}90%{transform:translateX(-1px);}}
 .hz-shake{animation:hz-shake 220ms ease both;}
-/* Ripple button */
+
+/* ── Ripple ── */
 .hz-ripple-wrap{position:relative;overflow:hidden;}
 .hz-ripple{position:absolute;border-radius:50%;pointer-events:none;transform:scale(0);animation:hz-ripple-anim 500ms cubic-bezier(.4,0,.2,1) forwards;}
 @keyframes hz-ripple-anim{to{transform:scale(4.5);opacity:0;}}
-/* Wdetail row stagger */
+
+/* ── Wdetail row stagger ── */
 @keyframes wdrowIn{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:translateY(0);}}
-/* Home load sequence */
-@keyframes hzFadeSlideDown{from{opacity:0;transform:translateY(-10px);}to{opacity:1;transform:translateY(0);}}
-@keyframes hzFadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
-@keyframes hzScaleIn{from{opacity:0;transform:scale(.88);}to{opacity:1;transform:scale(1);}}
-/* Reduced motion: kill everything */
+
+/* ── Reduced motion: kill everything ── */
 @media(prefers-reduced-motion:reduce){
   *,::before,::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;}
 }
@@ -269,10 +316,50 @@ select.inp option{background:rgba(15,18,28,.97);}
 </div>
 
 <nav class="nav"><div class="ni">
-  <div class="nb on" id="nav-home" onclick="go('home')"><i class="ti ti-home"></i><span>Home</span></div>
-  <div class="nb" id="nav-forecast" onclick="go('forecast')"><i class="ti ti-trending-up"></i><span>Forecast</span></div>
-  <div class="nb" id="nav-allocate" onclick="go('allocate')"><i class="ti ti-wallet"></i><span>Allocate</span></div>
-  <div class="nb" id="nav-manage" onclick="go('manage')"><i class="ti ti-adjustments-horizontal"></i><span>Manage</span></div>
+
+  <!-- HOME: house with door that swings open -->
+  <div class="nb on" id="nav-home" onclick="go('home')">
+    <svg class="nbi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 12 12 3 21 12"/>
+      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>
+      <path class="ni-door" d="M9 21v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6"/>
+    </svg>
+    <span>Home</span>
+  </div>
+
+  <!-- FORECAST: line draws from base to arrowhead -->
+  <div class="nb" id="nav-forecast" onclick="go('forecast')">
+    <svg class="nbi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline class="ni-line" points="3 17 8 12 13 14 20 7"/>
+      <polyline class="ni-arr" points="15 7 20 7 20 12"/>
+    </svg>
+    <span>Forecast</span>
+  </div>
+
+  <!-- ALLOCATE: wallet with note peeking up, coin turns gold -->
+  <div class="nb" id="nav-allocate" onclick="go('allocate')">
+    <svg class="nbi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect class="ni-note" x="8" y="8" width="8" height="5" rx="1"/>
+      <rect x="2" y="6" width="20" height="14" rx="2"/>
+      <path d="M2 10h20"/>
+      <circle class="ni-coin" cx="15.5" cy="15" r="1.8"/>
+    </svg>
+    <span>Allocate</span>
+  </div>
+
+  <!-- MANAGE: three sliders move to new positions and fill -->
+  <div class="nb" id="nav-manage" onclick="go('manage')">
+    <svg class="nbi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="4" y1="6" x2="20" y2="6"/>
+      <line x1="4" y1="12" x2="20" y2="12"/>
+      <line x1="4" y1="18" x2="20" y2="18"/>
+      <circle class="ni-s1" cx="8" cy="6" r="2.5"/>
+      <circle class="ni-s2" cx="15" cy="12" r="2.5"/>
+      <circle class="ni-s3" cx="11" cy="18" r="2.5"/>
+    </svg>
+    <span>Manage</span>
+  </div>
+
 </div></nav>
 </div>
 
@@ -744,38 +831,28 @@ let _curScreen='home';
 function go(name){
   hap(8);
   const prev=_curScreen; _curScreen=name;
-  // Nav icon bounce
+  // Nav icon spring bounce
   const navEl=document.getElementById('nav-'+name);
   if(navEl){navEl.classList.remove('nb-bounce');void navEl.offsetWidth;navEl.classList.add('nb-bounce');setTimeout(()=>navEl.classList.remove('nb-bounce'),320);}
-  // Update nav active state
+  // Nav active state
   document.querySelectorAll('.nb').forEach(n=>n.classList.remove('on'));
   if(navEl) navEl.classList.add('on');
-  // No animation if same screen or reduced motion
+  // No animation: same screen or reduced motion
+  const allSc=()=>document.querySelectorAll('.sc');
   if(prev===name||_RM()){
-    document.querySelectorAll('.sc').forEach(s=>s.classList.remove('on','slide-in-right','slide-in-left','slide-out-left','slide-out-right'));
+    allSc().forEach(s=>s.classList.remove('on','sc-out','sc-in-r','sc-in-l'));
     document.getElementById('sc-'+name).classList.add('on');
     return;
   }
   const dir=NAV_ORDER.indexOf(name)>=NAV_ORDER.indexOf(prev)?'right':'left';
-  const outCls=dir==='right'?'slide-out-left':'slide-out-right';
-  const inCls=dir==='right'?'slide-in-right':'slide-in-left';
   const prevSc=document.getElementById('sc-'+prev);
   const nextSc=document.getElementById('sc-'+name);
-  // Briefly absolute-position both so they layer during animation
-  const abs='position:absolute;top:0;left:0;right:0;bottom:0;';
-  prevSc.style.cssText+=abs; prevSc.style.zIndex='1';
-  nextSc.style.cssText+=abs; nextSc.style.zIndex='2';
-  // Hide all other screens
-  document.querySelectorAll('.sc').forEach(s=>{if(s!==prevSc&&s!==nextSc)s.classList.remove('on','slide-in-right','slide-in-left','slide-out-left','slide-out-right');});
-  // Animate out old, in new
-  prevSc.classList.add(outCls);
-  nextSc.classList.remove('slide-in-right','slide-in-left','slide-out-left','slide-out-right');
-  nextSc.classList.add('on',inCls);
-  // Clean up after animation
-  setTimeout(()=>{
-    prevSc.classList.remove('on',outCls);
-    [prevSc,nextSc].forEach(s=>{s.style.position='';s.style.top='';s.style.left='';s.style.right='';s.style.bottom='';s.style.zIndex='';});
-  },300);
+  // All screens are position:absolute so they stack cleanly —
+  // prev fades+scales back, next slides in on top. No bleed.
+  allSc().forEach(s=>{if(s!==prevSc&&s!==nextSc)s.classList.remove('on','sc-out','sc-in-r','sc-in-l');});
+  prevSc.classList.remove('sc-out','sc-in-r','sc-in-l'); prevSc.classList.add('sc-out');
+  nextSc.classList.remove('sc-out','sc-in-r','sc-in-l'); nextSc.classList.add('on',dir==='right'?'sc-in-r':'sc-in-l');
+  setTimeout(()=>{prevSc.classList.remove('on','sc-out');},300);
 }
 
 function saveState(){
