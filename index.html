@@ -38,6 +38,7 @@
     if (data.income) window.S.income = data.income;
     if (data.expenses) window.S.expenses = data.expenses;
     if (data.pots) window.S.pots = data.pots;
+    if (data.debts) window.S.debts = data.debts;
     if (data.pending !== undefined) window.S.pending = data.pending;
     if (data.balanceUpdated) window.S.balanceUpdated = data.balanceUpdated;
     window.renderAll();
@@ -275,8 +276,11 @@ select.inp option{background:rgba(15,18,28,.97);}
   <div style="flex:1;overflow-y:auto;padding-bottom:120px;">
     <div class="screen-pad">
       <p class="screen-title">Forecast</p>
-      <p class="screen-sub">Week by week — will I still have money?</p>
-      <div class="glass" style="margin-bottom:20px;">
+      <p class="screen-sub">Month by month — is my money growing?</p>
+      <!-- Monthly overview -->
+      <div style="display:flex;gap:8px;margin-bottom:16px;" id="fcmonths"></div>
+      <!-- 8-week summary bar -->
+      <div class="glass" style="margin-bottom:4px;">
         <div class="r" style="margin-bottom:10px;"><p class="lbl">8-week closing balance</p><p style="font-size:20px;font-weight:400;font-family:var(--fs);" id="fcend">—</p></div>
         <div class="btr" style="margin-bottom:10px;"><div class="bfill" id="fcbar"></div></div>
         <p style="font-size:13px;color:var(--t2);" id="fcnote"></p>
@@ -310,6 +314,7 @@ select.inp option{background:rgba(15,18,28,.97);}
       <div class="tab" onclick="mt('pots',this)">Pots</div>
       <div class="tab" onclick="mt('income',this)">Income</div>
       <div class="tab" onclick="mt('expenses',this)">Expenses</div>
+      <div class="tab" onclick="mt('debts',this)">Debts</div>
     </div>
   </div>
   <div style="flex:1;overflow-y:auto;padding:0 20px;display:flex;flex-direction:column;gap:10px;padding-bottom:120px;" id="mgc"></div>
@@ -368,8 +373,9 @@ select.inp option{background:rgba(15,18,28,.97);}
 <script>
 window.S = window.S || {};
 const S = window.S;
-Object.assign(S, { accounts:[], income:[], expenses:[], pots:[], pending:null, mgTab:'accounts', openChip:-1 });
+Object.assign(S, { accounts:[], income:[], expenses:[], pots:[], debts:[], pending:null, mgTab:'accounts', openChip:-1 });
 if (!S.balanceUpdated) S.balanceUpdated = {};
+if (!S.debts) S.debts = [];
 
 let BG_URL = localStorage.getItem('hz_bg') || 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&q=80';
 function applyBg(url){ BG_URL=url; localStorage.setItem('hz_bg',url); document.getElementById('bg').style.backgroundImage='url('+url+')'; }
@@ -563,6 +569,47 @@ function weeks8() {
   return wks;
 }
 
+// ── Monthly summaries (3 months rolling) ──
+function monthSummaries() {
+  const res=[]; const n=N(); let runBal=totalBal();
+  for (let m=0; m<3; m++) {
+    const mS=new Date(n.getFullYear(),n.getMonth()+m,1);
+    const mE=new Date(n.getFullYear(),n.getMonth()+m+1,0);
+    const mSs=mS.toISOString().split('T')[0]; const mEs=mE.toISOString().split('T')[0];
+    const fromDate=m===0?n:mS; const fromStr=fromDate.toISOString().split('T')[0];
+    let mIn=0,mOut=0;
+    // Income
+    S.income.forEach(i=>{
+      if(i.freq==='monthly'){
+        const day=new Date(i.date).getDate();
+        const d=new Date(mS.getFullYear(),mS.getMonth(),day);
+        if(d>=fromDate&&d<=mE) mIn+=i.amount;
+      } else if(i.freq==='weekly'){
+        const dow=new Date(i.date).getDay();
+        for(let d=new Date(fromDate);d<=mE;d.setDate(d.getDate()+1)){if(d.getDay()===dow) mIn+=i.amount;}
+      } else {
+        if(i.date>=fromStr&&i.date<=mEs) mIn+=i.amount;
+      }
+    });
+    // Expenses
+    S.expenses.forEach(e=>{
+      const f=e.freq||'monthly';
+      if(f==='monthly'){
+        const d=new Date(mS.getFullYear(),mS.getMonth(),e.day||1);
+        if(d>=fromDate&&d<=mE) mOut+=e.amount;
+      } else if(f==='weekly'){
+        for(let d=new Date(fromDate);d<=mE;d.setDate(d.getDate()+1)){if(d.getDay()===(e.dow??1)) mOut+=e.amount;}
+      } else if(f==='termly'||f==='half-termly'){
+        if(e.termDate&&e.termDate>=fromStr&&e.termDate<=mEs) mOut+=e.amount;
+      }
+    });
+    const opening=runBal; runBal=opening+mIn-mOut;
+    const net=mIn-mOut;
+    res.push({label:mS.toLocaleDateString('en-GB',{month:'long',year:'numeric'}),mIn,mOut,net,opening,closing:runBal,growing:net>=0});
+  }
+  return res;
+}
+
 function rForecast() {
   const wks=weeks8(); const last=wks[7].bal; const hasRisk=wks.some(w=>w.bal<0);
   document.getElementById('fcend').textContent='£'+fmt(Math.max(0,last));
@@ -571,6 +618,24 @@ function rForecast() {
   document.getElementById('fcbar').style.cssText='width:'+pct+'%;background:'+(last>0?'var(--gr)':'var(--wa)')+';';
   document.getElementById('fcnote').textContent=hasRisk?'⚠ Potential shortfall — check weeks below':'No shortfalls over 8 weeks — looking good.';
   document.getElementById('fcnote').style.color=hasRisk?'var(--am)':'var(--gr)';
+
+  // Monthly overview
+  const months=monthSummaries();
+  document.getElementById('fcmonths').innerHTML=months.map((m,i)=>{
+    const netColor=m.growing?'var(--gr)':'var(--wa)';
+    const balColor=m.closing>0?'var(--gr)':'var(--wa)';
+    return '<div class="glass" style="flex:1;min-width:0;padding:14px 14px 12px;">'
+      +'<p style="font-size:10px;color:var(--t3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px;">'+m.label+'</p>'
+      +'<div class="r" style="margin-bottom:6px;"><span style="font-size:11px;color:var(--t3);">In</span><span style="font-size:13px;font-weight:500;color:var(--gr);">+£'+fmt(m.mIn)+'</span></div>'
+      +'<div class="r" style="margin-bottom:10px;"><span style="font-size:11px;color:var(--t3);">Out</span><span style="font-size:13px;font-weight:500;color:rgba(255,255,255,.4);">-£'+fmt(m.mOut)+'</span></div>'
+      +'<div style="border-top:1px solid rgba(255,255,255,.1);padding-top:8px;">'
+      +'<div class="r" style="margin-bottom:4px;"><span style="font-size:10px;color:var(--t3);">Net</span><span style="font-size:12px;font-weight:600;color:'+netColor+';">'+(m.net>=0?'+':'')+'£'+fmt(m.net)+'</span></div>'
+      +'<div class="r"><span style="font-size:10px;color:var(--t3);">End balance</span><span style="font-size:13px;font-weight:500;color:'+balColor+';">£'+fmt(Math.max(0,m.closing))+'</span></div>'
+      +'</div>'
+      +(m.growing?'<div style="margin-top:8px;display:flex;align-items:center;gap:4px;"><span style="font-size:10px;color:var(--gr);">↑ Growing</span></div>':'<div style="margin-top:8px;display:flex;align-items:center;gap:4px;"><span style="font-size:10px;color:var(--wa);">↓ Shrinking</span></div>')
+      +'</div>';
+  }).join('');
+
   document.getElementById('fcwks').innerHTML=wks.map(w=>{
     const sc=w.safe?'var(--gr)':w.low?'var(--am)':'var(--wa)'; const sl=w.safe?'Safe':w.low?'Low':'At Risk';
     const items=[...w.inc.map(i=>'<div class="fwr"><span style="font-size:13px;color:var(--t2);">'+i.name+'</span><span style="font-size:13px;font-weight:500;color:var(--gr);">+£'+fmt(i.amount)+'</span></div>'), ...w.exp.map(e=>{ const ac=S.accounts.find(a=>a.id===e.accountId); return '<div class="fwr"><span style="font-size:13px;color:var(--t2);">'+e.name+(ac?' · '+ac.name:'')+'</span><span style="font-size:13px;color:rgba(255,255,255,.4);">-£'+fmt(e.amount)+'</span></div>'; })].join('');
@@ -704,6 +769,16 @@ function rManage() {
     el.innerHTML=S.income.map(i=>'<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+i.name+'</p><p style="font-size:12px;color:var(--t3);">'+i.cat+' · '+i.freq+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+£'+fmt(i.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-inc\','+i.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delInc('+i.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>').join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-inc\')"><i class="ti ti-plus"></i>Add income source</button>';
   } else if (t==='expenses') {
     el.innerHTML=S.expenses.map(e=>{ const ac=S.accounts.find(a=>a.id===e.accountId); const ef=e.freq||'monthly'; const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; const eWhen=ef==='weekly'?'Every '+DOW[e.dow??1]:ef==='termly'?'Each term · '+(e.termDate||'date not set'):ef==='half-termly'?'Half-termly · '+(e.termDate||'date not set'):'Monthly · day '+(e.day||1); return '<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+e.name+'</p><p style="font-size:12px;color:var(--t3);">'+(ac?ac.name:'Unassigned')+' · '+eWhen+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:15px;color:rgba(255,255,255,.45);">-£'+fmt(e.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-exp\','+e.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delExp('+e.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>'; }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-exp\')"><i class="ti ti-plus"></i>Add expense</button>';
+  } else if (t==='debts') {
+    if (!S.debts) S.debts=[];
+    const totalDebt=S.debts.reduce((a,d)=>a+d.amount,0);
+    const totalCard=totalDebt>0
+      ?'<div style="padding:14px 16px;border-radius:14px;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><div><p style="font-size:11px;color:rgba(248,113,113,.7);letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px;">Total outstanding</p><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:rgba(248,113,113,.9);">£'+fmt(totalDebt)+'</p></div><p style="font-size:12px;color:rgba(248,113,113,.6);">'+S.debts.length+' item'+(S.debts.length===1?'':'s')+'</p></div>'
+      :'<div style="padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);text-align:center;margin-bottom:4px;"><p style="font-size:13px;color:var(--t3);">No outstanding debts — nice work.</p></div>';
+    el.innerHTML=totalCard+S.debts.map(d=>{
+      const dateStr=d.dateReceived?new Date(d.dateReceived).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):'No date';
+      return '<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+d.name+'</p><p style="font-size:12px;color:var(--t3);">Received: '+dateStr+(d.note?' · '+d.note:'')+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:500;color:rgba(248,113,113,.85);">£'+fmt(d.amount)+'</p><div style="display:flex;gap:6px;margin-top:4px;"><button class="chip chip-sm" style="font-size:12px;color:var(--gr);border-color:var(--grb);background:var(--grg);" onclick="markDebtPaid('+d.id+')"><i class="ti ti-check" style="font-size:12px;"></i>Paid</button><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-debt\','+d.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delDebt('+d.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>';
+    }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-debt\')"><i class="ti ti-plus"></i>Add debt or unpaid bill</button>';
   }
 }
 
@@ -786,6 +861,11 @@ function openModal(type, id) {
     const acOpts=S.accounts.map(a=>'<option value="'+a.id+'" '+(a.id===e.accountId?'selected':'')+'>'+a.name+'</option>').join('');
     const efreq=e.freq||'monthly';
     b.innerHTML=hdr('Edit · '+e.name)+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" value="'+e.name+'">'+L2('Amount (£)')+'<input class="inp" id="m-amt" type="number" value="'+e.amount+'">'+L2('How often?')+'<select class="inp" id="m-efreq" onchange="updateExpFields(true)"><option value="monthly" '+(efreq==='monthly'?'selected':'')+'>Monthly</option><option value="weekly" '+(efreq==='weekly'?'selected':'')+'>Weekly</option><option value="termly" '+(efreq==='termly'?'selected':'')+'>Each school term (3×/year)</option><option value="half-termly" '+(efreq==='half-termly'?'selected':'')+'>Each half term (6×/year · ~6 weeks)</option></select><div id="m-efields">'+expFreqFields(efreq,e)+'</div>'+L2('Account')+'<select class="inp" id="m-acct">'+acOpts+'</select>'+L2('Category')+'<select class="inp" id="m-cat"><option value="household" '+(e.cat==='household'?'selected':'')+'>Household</option><option value="business" '+(e.cat==='business'?'selected':'')+'>Business</option><option value="personal" '+(e.cat==='personal'?'selected':'')+'>Personal</option></select>'+foot('Save changes','saveExp(true)')+'</div>';
+  } else if (type==='add-debt') {
+    b.innerHTML=hdr('Add debt / unpaid bill')+'<div class="c g12">'+L2('What is it for?')+'<input class="inp" id="m-name" placeholder="e.g. Parking ticket, Gas bill">'+L2('Amount owed (£)')+'<input class="inp" id="m-amt" type="number" placeholder="0.00">'+L2('Date received (optional)')+'<input class="inp" id="m-date" type="date" value="'+td()+'">'+L2('Notes (optional)')+'<input class="inp" id="m-note" placeholder="e.g. Council ref, case number">'+foot('Add debt','saveDebt(false)')+'</div>';
+  } else if (type==='edit-debt') {
+    const dbt=S.debts.find(x=>x.id===id); if(!dbt) return;
+    b.innerHTML=hdr('Edit · '+dbt.name)+'<div class="c g12">'+L2('What is it for?')+'<input class="inp" id="m-name" value="'+dbt.name+'">'+L2('Amount owed (£)')+'<input class="inp" id="m-amt" type="number" value="'+dbt.amount+'">'+L2('Date received (optional)')+'<input class="inp" id="m-date" type="date" value="'+(dbt.dateReceived||td())+'">'+L2('Notes (optional)')+'<input class="inp" id="m-note" value="'+(dbt.note||'')+'">'+foot('Save changes','saveDebt(true)')+'</div>';
   } else if (type==='bg-picker') {
     const isLocal=BG_URL&&BG_URL.startsWith('data:');
     b.innerHTML=hdr('Background')+'<div class="c g12"><p class="lbl" style="margin-bottom:8px;">Your photos</p><label style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-radius:14px;border:1px solid var(--bd);background:var(--gl);cursor:pointer;color:var(--t1);font-size:14px;font-weight:500;"><i class="ti ti-photo-up" style="font-size:18px;color:rgba(255,255,255,.5);"></i>Choose from photo library<input type="file" accept="image/*" style="display:none;" onchange="loadLocalPhoto(this)"></label>'+(isLocal?'<p style="font-size:11px;color:var(--gr);margin-top:-2px;">✓ Using a photo from your library</p>':'')+'<p class="lbl" style="margin-bottom:8px;margin-top:8px;">Presets</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">'+BG_PRESETS.map(p=>'<div onclick="applyBg(\''+p.url+'\');openModal(\'bg-picker\');" style="height:72px;border-radius:12px;cursor:pointer;background:url(\''+p.url+'\') center/cover;border:2px solid '+(BG_URL===p.url?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;overflow:hidden;"><div style="position:absolute;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-end;padding:6px 8px;"><span style="font-size:11px;color:#fff;font-weight:500;">'+p.label+'</span></div>'+(BG_URL===p.url?'<div style="position:absolute;top:5px;right:5px;width:16px;height:16px;border-radius:50%;background:var(--gr);display:flex;align-items:center;justify-content:center;"><i class="ti ti-check" style="font-size:10px;color:#000;"></i></div>':'')+'</div>').join('')+'</div><p class="lbl" style="margin-bottom:8px;margin-top:8px;">Custom URL</p><input class="inp" id="bg-custom" placeholder="https://images.unsplash.com/..." value="'+(isLocal?'':BG_URL)+'"><p style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5;">Paste any image URL. Add ?w=800&q=80 for Unsplash.</p><div style="display:flex;gap:8px;margin-top:8px;"><button class="chip" style="flex:1;justify-content:center;" onclick="closeModal()">Done</button><button class="chip chip-solid" style="flex:1;justify-content:center;" onclick="applyBg(document.getElementById(\'bg-custom\').value);openModal(\'bg-picker\');">Apply URL</button></div></div>';
@@ -819,6 +899,19 @@ function saveExp(isEdit){
   if(isEdit){ const e=S.expenses.find(x=>x.id===_eid); if(!e) return; Object.assign(e,obj); }else{ S.expenses.push({id:Date.now(),...obj}); }
   closeModal(); renderAll();
 }
+function saveDebt(isEdit){
+  const name=document.getElementById('m-name').value.trim();
+  const amt=parseFloat(document.getElementById('m-amt').value)||0;
+  const dateReceived=document.getElementById('m-date').value||td();
+  const note=document.getElementById('m-note').value.trim();
+  if(!name||!amt) return;
+  if(!S.debts) S.debts=[];
+  if(isEdit){ const d=S.debts.find(x=>x.id===_eid); if(!d) return; d.name=name; d.amount=amt; d.dateReceived=dateReceived; d.note=note; }
+  else { S.debts.push({id:Date.now(),name,amount:amt,dateReceived,note}); }
+  closeModal(); renderAll();
+}
+function delDebt(id){ S.debts=(S.debts||[]).filter(d=>d.id!==id); renderAll(); }
+function markDebtPaid(id){ S.debts=(S.debts||[]).filter(d=>d.id!==id); renderAll(); }
 function savePay(){ const a=parseFloat(document.getElementById('ap-a').value)||0; if(!a) return; const acEl=document.getElementById('ap-acct'); S.pending={amount:a,desc:document.getElementById('ap-d').value||'Payment',accountId:acEl?parseInt(acEl.value)||null:null,date:document.getElementById('ap-dt').value||td(),costs:parseFloat(document.getElementById('ap-c').value)||0,freq:document.getElementById('ap-f').value}; closeModal(); rAllocate(); }
 function doMI(){ const a=parseFloat(document.getElementById('m-amt').value)||0; const d=document.getElementById('m-desc').value||'Payment'; if(!a) return; S.income.push({id:Date.now(),name:d,amount:a,date:td(),freq:'one-off',cat:'other'}); S.pending={amount:a,desc:d,date:td(),costs:0,freq:'one-off'}; closeModal(); renderAll(); go('allocate'); }
 function doMO(){ const a=parseFloat(document.getElementById('m-amt').value)||0; if(!a) return; const acEl=document.getElementById('m-mo-acct'); const acId=acEl?parseInt(acEl.value):S.accounts[0]?.id; const ac=S.accounts.find(x=>x.id===acId)||S.accounts[0]; if(ac){ ac.balance=Math.max(0,ac.balance-a); if(!S.balanceUpdated) S.balanceUpdated={}; S.balanceUpdated[ac.id]=td(); } closeModal(); renderAll(); }
@@ -857,7 +950,7 @@ function go(name){
 }
 
 function saveState(){
-  const data={accounts:S.accounts,income:S.income,expenses:S.expenses,pots:S.pots,pending:S.pending||null,balanceUpdated:S.balanceUpdated||{}};
+  const data={accounts:S.accounts,income:S.income,expenses:S.expenses,pots:S.pots,debts:S.debts||[],pending:S.pending||null,balanceUpdated:S.balanceUpdated||{}};
   try{localStorage.setItem('hz_data',JSON.stringify(data));}catch(e){}
   if(window._fbReady&&window._fbSet&&window._fbRef){
     window._suppressRemote=true;
@@ -867,7 +960,7 @@ function saveState(){
   }
 }
 function loadState(){
-  try{ const raw=localStorage.getItem('hz_data'); if(!raw) return; const d=JSON.parse(raw); if(d.accounts&&d.accounts.length) S.accounts=d.accounts; if(d.income) S.income=d.income; if(d.expenses) S.expenses=d.expenses; if(d.pots) S.pots=d.pots; S.pending=d.pending||null; if(d.balanceUpdated) S.balanceUpdated=d.balanceUpdated; }catch(e){}
+  try{ const raw=localStorage.getItem('hz_data'); if(!raw) return; const d=JSON.parse(raw); if(d.accounts&&d.accounts.length) S.accounts=d.accounts; if(d.income) S.income=d.income; if(d.expenses) S.expenses=d.expenses; if(d.pots) S.pots=d.pots; if(d.debts) S.debts=d.debts; S.pending=d.pending||null; if(d.balanceUpdated) S.balanceUpdated=d.balanceUpdated; }catch(e){}
 }
 function clearAllData(){ const b=document.getElementById('mbody'); b.innerHTML='<p style="font-size:22px;font-weight:300;font-family:var(--fs);color:var(--t1);margin-bottom:8px;">Delete all data?</p><p style="font-size:14px;color:var(--t2);margin-bottom:24px;line-height:1.6;">This will wipe everything. There\'s no undo.</p><div style="display:flex;gap:8px;"><button class="chip" style="flex:1;justify-content:center;" onclick="closeModal()">Cancel</button><button class="chip" style="flex:1;justify-content:center;background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.35);color:rgba(248,113,113,.9);" onclick="confirmDelete()">Yes, delete everything</button></div>'; document.getElementById('modal').classList.add('on'); }
 function confirmDelete(){ hapDbl(); localStorage.removeItem('hz_data'); closeModal(); location.reload(); }
