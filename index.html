@@ -633,49 +633,50 @@ function suggestPotPct(p, monthlyBills) {
 function smartAlloc(gross, costs) {
   const net=Math.max(0,gross-costs);
   const monthlyBills=Math.round(S.expenses.reduce((a,e)=>a+expMonthly(e),0));
-  // Bills buffer: build toward 2 months of expenses as a cushion.
-  // Contribution tapers as the buffer fills.
-  const billsTarget=monthlyBills*2;
-  const billsAcctBal=S.accounts.reduce((a,ac)=>a+ac.balance,0); // total in accounts as proxy
-  const billsGap=Math.max(0,billsTarget-billsAcctBal);
-  // Suggest 15% of payment toward bills buffer, capped at the gap, min the immediate need
-  const billsSuggested=Math.min(net,Math.max(monthlyBills,Math.round(Math.min(billsGap,net*0.15))));
 
-  // Separate pots by whether they have an explicit alloc % set
+  // Bills buffer: build toward 2 months of expenses over time.
+  // Each payment contributes 20% — never tries to fund a whole month at once.
+  const billsTarget=monthlyBills*2;
+  const billsAcctBal=S.accounts.reduce((a,ac)=>a+ac.balance,0);
+  const billsGap=Math.max(0,billsTarget-billsAcctBal);
+  const billsSuggested=billsGap>0?Math.min(Math.round(net*0.2),billsGap):0;
+
+  // Remaining after bills buffer contribution
+  const remaining=Math.max(0,net-billsSuggested);
+
   const explicitPots=S.pots.filter(p=>p.alloc>0);
   const autoPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')!=='personal');
   const personalPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')==='personal');
 
-  let used=billsSuggested;
+  let usedForPots=0;
   const potItems=[];
 
-  // Explicit % pots
+  // Explicit % pots — % of remaining (after bills)
   explicitPots.forEach(p=>{
-    const amt=Math.round(net*(p.alloc/100));
-    used+=amt;
+    const amt=Math.round(remaining*(p.alloc/100));
+    usedForPots+=amt;
     const note=p.alloc+'% of this payment'+(p.target>0?' · '+Math.min(100,Math.round(p.current/p.target*100))+'% towards £'+fmt(p.target)+' target':'');
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note,pot:p});
   });
 
-  // Auto-suggested % pots (critical/important/nice with no explicit %)
+  // Auto-suggested priority pots — % of remaining
   autoPots.forEach(p=>{
     const pct=suggestPotPct(p,monthlyBills);
-    const amt=Math.round(net*(pct/100));
-    used+=amt;
+    const amt=Math.round(remaining*(pct/100));
+    usedForPots+=amt;
     const fillMsg=p.target>0?' · '+Math.min(100,Math.round(p.current/p.target*100))+'% towards £'+fmt(p.target):'';
     const priLabel={'critical':'Critical','important':'Important','nice':'Nice to have'}[p.priority]||'';
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note:priLabel+' · suggested '+pct+'%'+fillMsg+' — tap to adjust',pot:p});
   });
 
-  // Personal pots: equal split of whatever is left
-  const afterAll=Math.max(0,net-used);
+  // Personal pots: equal split of what's left after bills + other pots
+  const afterPots=Math.max(0,remaining-usedForPots);
   const nP=personalPots.length;
-  const perPersonal=nP>0?Math.floor(afterAll/nP):0;
+  const perPersonal=nP>0?Math.floor(afterPots/nP):0;
   personalPots.forEach(p=>{
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perPersonal,note:'Your spending money — equal share of what\'s left',pot:p});
   });
 
-  // Restore original pot order
   potItems.sort((a,b)=>S.pots.findIndex(p=>p.id===a.pot.id)-S.pots.findIndex(p=>p.id===b.pot.id));
   return {net,billsSuggested,monthlyBills,billsTarget,billsAcctBal,potItems};
 }
