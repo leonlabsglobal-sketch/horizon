@@ -637,17 +637,37 @@ function smartAlloc(gross, costs) {
   const billsAcctBal=S.accounts.reduce((a,ac)=>a+ac.balance,0);
   const billsGap=Math.max(0,billsTarget-billsAcctBal);
 
-  // Shortfalls sorted largest first (Bills before Business etc.)
-  const totalShortfall=S.accounts.reduce((a,ac)=>a+acctShort(ac),0);
-  // Buffer extra: only once shortfalls are cleared
+  // Split accounts: bills-out (need topping up) vs personal-in (get remainder)
+  const billsAccts=S.accounts.filter(ac=>(ac.acType||'bills')==='bills');
+  const personalAccts=S.accounts.filter(ac=>ac.acType==='personal');
+
+  // This week's expenses per account
+  const n=N(); const ws=new Date(n); const we=new Date(n); we.setDate(n.getDate()+6);
+  const wsS=ws.toISOString().split('T')[0]; const weS=we.toISOString().split('T')[0];
+
+  // Each bills account gets its own row, in array order (= user priority).
+  // Budget: 55% of net split across all bills accounts proportional to their shortfall.
+  const totalShortfall=billsAccts.reduce((a,ac)=>a+acctShort(ac),0);
   const bufferExtra=billsGap>totalShortfall?Math.min(Math.round(net*0.1),billsGap-totalShortfall):0;
-  // Bills gets 55% of net — blended so pots and personal always get something.
-  // Cap at the actual need (shortfall + buffer) so we don't over-allocate.
-  const billsSuggested=Math.min(Math.round(net*0.55),totalShortfall+bufferExtra);
+  const billsBudget=Math.min(Math.round(net*0.55),totalShortfall+bufferExtra);
 
-  // Pots and personal get the remaining 45%+
-  const remaining=Math.max(0,net-billsSuggested);
+  const acctItems=[];
+  let usedForAccts=0;
+  billsAccts.forEach(ac=>{
+    const short=acctShort(ac);
+    const weekExps=S.expenses.filter(e=>e.accountId===ac.id&&expInWeek(e,ws,we,wsS,weS));
+    const weekAmt=weekExps.reduce((a,e)=>a+e.amount,0);
+    // Share of the bills budget proportional to this account's shortfall (min: week amount)
+    const share=totalShortfall>0?Math.round(billsBudget*(short/totalShortfall)):Math.round(billsBudget/Math.max(1,billsAccts.length));
+    const suggested=Math.min(Math.max(weekAmt,share),net-usedForAccts);
+    usedForAccts+=suggested;
+    const note=weekAmt>0?'£'+fmt(weekAmt)+' due this week'+(short>0?' · £'+fmt(short)+' total shortfall':'')
+                        :short>0?'£'+fmt(short)+' short — no bills due this week':'Up to date';
+    acctItems.push({uid:'acct-'+ac.id,name:ac.name,color:ac.color,suggested,weekAmt,shortfall:short,note,acct:ac});
+  });
 
+  // Pots get their share of remaining
+  const remaining=Math.max(0,net-usedForAccts);
   const explicitPots=S.pots.filter(p=>p.alloc>0);
   const autoPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')!=='personal');
   const personalPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')==='personal');
@@ -655,7 +675,6 @@ function smartAlloc(gross, costs) {
   let usedForPots=0;
   const potItems=[];
 
-  // Explicit % pots — % of remaining (after bills)
   explicitPots.forEach(p=>{
     const amt=Math.round(remaining*(p.alloc/100));
     usedForPots+=amt;
@@ -663,7 +682,6 @@ function smartAlloc(gross, costs) {
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note,pot:p});
   });
 
-  // Auto-suggested priority pots — % of remaining
   autoPots.forEach(p=>{
     const pct=suggestPotPct(p,monthlyBills);
     const amt=Math.round(remaining*(pct/100));
@@ -673,24 +691,35 @@ function smartAlloc(gross, costs) {
     potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note:priLabel+' · suggested '+pct+'%'+fillMsg+' — tap to adjust',pot:p});
   });
 
-  // Personal pots: equal split of what's left after bills + other pots
+  // Remainder after pots splits between personal pots + personal accounts
   const afterPots=Math.max(0,remaining-usedForPots);
-  const nP=personalPots.length;
-  const perPersonal=nP>0?Math.floor(afterPots/nP):0;
+  const nPersonalPots=personalPots.length; const nPersonalAccts=personalAccts.length;
+  const nPersonal=nPersonalPots+nPersonalAccts;
+  const perPersonal=nPersonal>0?Math.floor(afterPots/nPersonal):0;
+
   personalPots.forEach(p=>{
-    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perPersonal,note:'Your spending money — equal share of what\'s left',pot:p});
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perPersonal,note:'Personal — equal share of what\'s left',pot:p});
   });
 
   potItems.sort((a,b)=>S.pots.findIndex(p=>p.id===a.pot.id)-S.pots.findIndex(p=>p.id===b.pot.id));
-  return {net,billsSuggested,monthlyBills,billsTarget,billsAcctBal,totalShortfall,potItems};
+
+  const personalAcctItems=personalAccts.map(ac=>({
+    uid:'acct-'+ac.id,name:ac.name,color:ac.color,suggested:perPersonal,note:'Personal — equal share of what\'s left',acct:ac
+  }));
+
+  const trueRemainder=Math.max(0,afterPots-perPersonal*nPersonal);
+  return {net,acctItems,potItems,personalAcctItems,trueRemainder,monthlyBills,billsTarget,billsAcctBal,totalShortfall};
 }
 
 function allocRemainder() {
   const p=S.pending; if(!p) return 0;
   const r=smartAlloc(p.amount,p.costs||0);
-  const bills=_allocEdits['bills']!==undefined?_allocEdits['bills']:r.billsSuggested;
-  let potTotal=r.potItems.reduce((a,i)=>{ const v=_allocEdits[i.uid]!==undefined?_allocEdits[i.uid]:i.suggested; return a+Math.max(0,v); },0);
-  return Math.max(0,r.net-bills-potTotal);
+  const getVal=uid=>_allocEdits[uid]!==undefined?Math.max(0,parseFloat(_allocEdits[uid])||0):0;
+  let used=0;
+  r.acctItems.forEach(i=>{ used+=_allocEdits[i.uid]!==undefined?getVal(i.uid):i.suggested; });
+  r.potItems.forEach(i=>{ used+=_allocEdits[i.uid]!==undefined?getVal(i.uid):i.suggested; });
+  r.personalAcctItems.forEach(i=>{ used+=_allocEdits[i.uid]!==undefined?getVal(i.uid):i.suggested; });
+  return Math.max(0,r.net-used);
 }
 
 function updateAllocRemainder() {
@@ -711,20 +740,20 @@ function rAllocate() {
     return;
   }
   const r=smartAlloc(p.amount,p.costs||0);
-  const inputStyle='width:80px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;';
-  const bufferPct=r.billsTarget>0?Math.min(100,Math.round(r.billsAcctBal/r.billsTarget*100)):0;
-  const acctNotes=S.accounts.filter(ac=>acctShort(ac)>0).sort((a,b)=>acctExpenses(b.id)-acctExpenses(a.id)).map(ac=>ac.name+' needs £'+fmt(acctShort(ac))).join(' · ');
-  const paymentsToClr=r.billsSuggested>0&&r.totalShortfall>r.billsSuggested?Math.ceil(r.totalShortfall/r.billsSuggested):0;
-  const bufferNote=(acctNotes||'Accounts covered')+(paymentsToClr>0?' · ~'+paymentsToClr+' payments to clear':r.totalShortfall===0?' · buffer '+bufferPct+'% of £'+fmt(r.billsTarget)+' target':'');
-  const billsRow='<div class="ar"><div class="ad" style="background:rgba(248,113,113,.7);"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;color:var(--t1);">Bills &amp; buffer</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+r.billsSuggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\'bills\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+bufferNote+'</p></div></div>';
-  const potRows=r.potItems.map(item=>'<div class="ar"><div class="ad" style="background:'+item.color+';"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;">'+item.name+'</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+item.suggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\''+item.uid+'\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+item.note+'</p></div></div>').join('');
+  const iS='width:80px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;';
+  const mkRow=(uid,color,name,suggested,note)=>'<div class="ar"><div class="ad" style="background:'+color+';"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;color:var(--t1);">'+name+'</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+suggested+'" inputmode="decimal" style="'+iS+'" oninput="allocEdit(\''+uid+'\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+note+'</p></div></div>';
+  const acctRows=r.acctItems.map(i=>mkRow(i.uid,i.color,i.name,i.suggested,i.note)).join('');
+  const potRows=r.potItems.map(i=>mkRow(i.uid,i.color,i.name,i.suggested,i.note)).join('');
+  const personalRows=r.personalAcctItems.map(i=>mkRow(i.uid,i.color,i.name,i.suggested,i.note)).join('');
+  const hasPersonalAccts=r.personalAcctItems.length>0;
   const initialRem=allocRemainder();
   el.innerHTML=
     '<div style="position:relative;overflow:hidden;padding:24px;border-radius:16px;border:1px solid var(--grb);background:rgba(255,255,255,.16);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);"><div style="position:absolute;right:-10px;bottom:-20px;font-size:100px;font-family:var(--fs);color:rgba(255,255,255,.08);line-height:1;pointer-events:none;">£</div><div style="position:relative;z-index:1;"><div class="r" style="margin-bottom:16px;"><p class="lbl">incoming payment</p><div class="pill pgr"><span class="dot"></span>pending</div></div><p style="font-size:44px;font-weight:300;font-family:var(--fs);margin-bottom:6px;letter-spacing:-.02em;color:var(--t1);">£'+fmt(p.amount)+'</p><p style="font-size:14px;color:var(--t2);">'+p.desc+' · '+fmtD(p.date)+'</p>'+(p.costs>0?'<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--grb);"><div class="r" style="margin-bottom:8px;"><span style="font-size:13px;color:var(--t2);">Job costs</span><span style="font-size:13px;font-weight:500;color:var(--wa);">-£'+fmt(p.costs)+'</span></div><div class="r"><span style="font-size:14px;font-weight:500;">Net to allocate</span><span style="font-size:20px;font-weight:400;color:var(--gr);font-family:var(--fs);">£'+fmt(r.net)+'</span></div></div>':'')+'<button class="chip chip-sm" style="margin-top:16px;font-size:12px;" onclick="openModal(\'pay\')"><i class="ti ti-edit" style="font-size:12px;"></i>Edit payment</button></div></div>'
-    +'<div class="glass" style="padding:6px 0;">'+billsRow+(r.potItems.length>0?potRows:'')+'</div>'
-    +(r.potItems.length===0?'<div style="padding:12px 16px;border-radius:14px;border:1px dashed rgba(255,255,255,.15);text-align:center;"><p style="font-size:13px;color:var(--t3);margin-bottom:8px;">No savings pots yet — add some in Manage</p><button class="chip chip-sm" onclick="go(\'manage\')">Set up pots →</button></div>':'')
-    +'<div style="padding:16px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);"><div class="r"><div><p style="font-size:15px;font-weight:500;color:var(--t1);margin-bottom:4px;">Yours to keep</p><p style="font-size:12px;color:var(--t3);">After bills and pots</p></div><p style="font-size:32px;font-weight:300;font-family:var(--fs);color:var(--gr);" id="alloc-remainder">£'+fmt(initialRem)+'</p></div></div>'
-    +'<p style="font-size:11px;color:rgba(255,255,255,.3);text-align:center;line-height:1.6;padding:0 8px;">Suggestions only — adjust any amount before confirming.</p>'
+    +(r.acctItems.length>0?'<p class="sh" style="margin-top:16px;margin-bottom:6px;">accounts to top up</p><div class="glass" style="padding:6px 0;">'+acctRows+'</div>':'')
+    +(r.potItems.length>0?'<p class="sh" style="margin-top:16px;margin-bottom:6px;">savings pots</p><div class="glass" style="padding:6px 0;">'+potRows+'</div>':'<div style="padding:12px 16px;border-radius:14px;border:1px dashed rgba(255,255,255,.15);text-align:center;margin-top:12px;"><p style="font-size:13px;color:var(--t3);margin-bottom:8px;">No savings pots yet</p><button class="chip chip-sm" onclick="go(\'manage\')">Set up pots →</button></div>')
+    +(hasPersonalAccts?'<p class="sh" style="margin-top:16px;margin-bottom:6px;">personal accounts</p><div class="glass" style="padding:6px 0;">'+personalRows+'</div>':'')
+    +'<div style="padding:16px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);margin-top:12px;"><div class="r"><div><p style="font-size:15px;font-weight:500;color:var(--t1);margin-bottom:4px;">'+(hasPersonalAccts?'Unallocated remainder':'Yours to keep')+'</p><p style="font-size:12px;color:var(--t3);">'+(hasPersonalAccts?'Any leftover after rounding':'After all accounts and pots')+'</p></div><p style="font-size:32px;font-weight:300;font-family:var(--fs);color:var(--gr);" id="alloc-remainder">£'+fmt(initialRem)+'</p></div></div>'
+    +'<p style="font-size:11px;color:rgba(255,255,255,.3);text-align:center;line-height:1.6;padding:0 8px;margin-top:8px;">Suggestions only — adjust any amount before confirming.</p>'
     +'<button class="chip chip-solid chip-full hz-ripple-wrap" onclick="doConfirmAlloc(event)">Confirm &amp; move money →</button>';
 }
 
@@ -732,15 +761,14 @@ function doConfirmAlloc(e){ rippleFrom(e.currentTarget,e); hapDbl(); confirmAllo
 function confirmAlloc() {
   const p=S.pending; if(!p) return;
   const r=smartAlloc(p.amount,p.costs||0);
-  // Add bills amount to the payment's account (or first account)
-  const billsAmt=Math.max(0,_allocEdits['bills']!==undefined?parseFloat(_allocEdits['bills'])||0:r.billsSuggested);
-  const remainder=allocRemainder();
-  const destAcct=S.accounts.find(a=>a.id===p.accountId)||S.accounts[0];
-  if (destAcct&&!S.balanceUpdated) S.balanceUpdated={};
-  // Add pots
-  r.potItems.forEach(item=>{ const amt=Math.max(0,_allocEdits[item.uid]!==undefined?parseFloat(_allocEdits[item.uid])||0:item.suggested); if(item.pot&&amt>0) item.pot.current+=amt; });
-  // Remainder + bills portion go to the destination account
-  if (destAcct){ destAcct.balance+=billsAmt+remainder; S.balanceUpdated[destAcct.id]=td(); }
+  if(!S.balanceUpdated) S.balanceUpdated={};
+  const getAmt=uid=>_allocEdits[uid]!==undefined?Math.max(0,parseFloat(_allocEdits[uid])||0):null;
+  // Apply to bills accounts
+  r.acctItems.forEach(item=>{ const amt=getAmt(item.uid)??item.suggested; if(item.acct&&amt>0){item.acct.balance+=amt;S.balanceUpdated[item.acct.id]=td();} });
+  // Apply to pots
+  r.potItems.forEach(item=>{ const amt=getAmt(item.uid)??item.suggested; if(item.pot&&amt>0) item.pot.current+=amt; });
+  // Apply to personal accounts
+  r.personalAcctItems.forEach(item=>{ const amt=getAmt(item.uid)??item.suggested; if(item.acct&&amt>0){item.acct.balance+=amt;S.balanceUpdated[item.acct.id]=td();} });
   S.pending=null; renderAll(); go('home');
 }
 
@@ -756,8 +784,9 @@ function rManage() {
     return '';
   };
   if (t==='accounts') {
-    el.innerHTML=S.accounts.map(ac=>{ const exp=acctExpenses(ac.id); const cov=acctCovered(ac); const short=acctShort(ac);
-      return '<div class="glass"><div class="r" style="margin-bottom:12px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:10px;height:10px;border-radius:50%;background:'+ac.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+ac.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(ac.balance)+'</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Monthly expenses</p><p style="font-size:13px;font-weight:500;color:var(--t1);">£'+fmt(exp)+'/mo</p></div><div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Status</p>'+(cov?'<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Covered</div>':'<div class="pill pwa" style="font-size:10px;">£'+fmt(short)+' short</div>')+'</div><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'account\','+ac.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(ac.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(ac.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:8px;"><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-acct\','+ac.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="flex:1;" onclick="shakeAndDel(this,()=>delAcct('+ac.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i>Remove</button></div></div>';
+    const typeLabel={bills:'💳 Bills out',personal:'👤 Personal in'};
+    el.innerHTML=S.accounts.map(ac=>{ const exp=acctExpenses(ac.id); const cov=acctCovered(ac); const short=acctShort(ac); const at=ac.acType||'bills';
+      return '<div class="glass"><div class="r" style="margin-bottom:4px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:10px;height:10px;border-radius:50%;background:'+ac.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+ac.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(ac.balance)+'</p></div><p style="font-size:12px;color:var(--t3);margin-bottom:10px;">'+typeLabel[at]+(at==='bills'?' · £'+fmt(exp)+'/mo':'')+'</p>'+(at==='bills'?'<div class="r" style="margin-bottom:8px;"><p style="font-size:13px;color:var(--t2);">Status</p>'+(cov?'<div class="pill pgr" style="font-size:10px;"><span class="dot"></span>Covered</div>':'<div class="pill pwa" style="font-size:10px;">£'+fmt(short)+' short</div>')+'</div>':'')+'<div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'account\','+ac.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(ac.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(ac.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="moveAcct('+ac.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="moveAcct('+ac.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-acct\','+ac.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delAcct('+ac.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>';
     }).join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-acct\')"><i class="ti ti-plus"></i>Add account</button><div style="margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,.1);"><p style="font-size:11px;color:rgba(255,255,255,.3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Danger zone</p><button class="chip" style="width:100%;justify-content:center;border-color:rgba(248,113,113,.3);color:rgba(248,113,113,.8);background:rgba(248,113,113,.08);" onclick="clearAllData()"><i class="ti ti-trash"></i>Delete all data and start fresh</button></div>';
   } else if (t==='pots') {
     const potTotal=S.pots.reduce((a,p)=>a+p.current,0);
@@ -838,10 +867,11 @@ function openModal(type, id) {
     const p=S.pending||{}; const acOpts=S.accounts.map(a=>'<option value="'+a.id+'" '+(a.id===p.accountId?'selected':'')+'>'+a.name+'</option>').join('');
     b.innerHTML=hdr('Incoming payment','Job costs come off before allocation.')+'<div class="c g12">'+L2('Amount (£)')+'<input class="inp" id="ap-a" type="number" value="'+(p.amount||'')+'">'+L2('Description')+'<input class="inp" id="ap-d" value="'+(p.desc||'')+'" placeholder="Client or job">'+L2('Which account does this go into?')+'<select class="inp" id="ap-acct">'+acOpts+'</select>'+L2('Date')+'<input class="inp" id="ap-dt" type="date" value="'+(p.date||td())+'">'+L2('Job costs (£)')+'<input class="inp" id="ap-c" type="number" value="'+(p.costs||'')+'" placeholder="0">'+L2('Frequency')+'<select class="inp" id="ap-f"><option value="one-off" '+((p.freq||'one-off')==='one-off'?'selected':'')+'>One-off</option><option value="monthly" '+(p.freq==='monthly'?'selected':'')+'>Monthly</option><option value="weekly" '+(p.freq==='weekly'?'selected':'')+'>Weekly</option></select>'+foot('Get allocation →','savePay()')+'</div>';
   } else if (type==='add-acct') {
-    b.innerHTML=hdr('New account')+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" placeholder="e.g. Bills, Business, Personal">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+foot('Add account','saveAcct(false)')+'</div>';
+    b.innerHTML=hdr('New account')+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" placeholder="e.g. Bills, Business, Personal">'+L2('Account type')+'<div style="display:flex;gap:8px;"><div class="toggle-opt on" id="m-at-bills" onclick="setAcctType(\'bills\',this)" style="flex:1;justify-content:center;">💳 Bills out</div><div class="toggle-opt" id="m-at-personal" onclick="setAcctType(\'personal\',this)" style="flex:1;justify-content:center;">👤 Personal in</div></div><p style="font-size:12px;color:var(--t2);margin-top:4px;" id="m-at-hint">Money goes out — shown in Allocate to top up.</p><input type="hidden" id="m-actype" value="bills">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+foot('Add account','saveAcct(false)')+'</div>';
   } else if (type==='edit-acct') {
     const ac=S.accounts.find(x=>x.id===id); if(!ac) return;
-    b.innerHTML=hdr('Edit · '+ac.name)+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" value="'+ac.name+'">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+ac.balance+'">'+foot('Save changes','saveAcct(true)')+'</div>';
+    const at=ac.acType||'bills';
+    b.innerHTML=hdr('Edit · '+ac.name)+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" value="'+ac.name+'">'+L2('Account type')+'<div style="display:flex;gap:8px;"><div class="toggle-opt '+(at==='bills'?'on':'')+'" id="m-at-bills" onclick="setAcctType(\'bills\',this)" style="flex:1;justify-content:center;">💳 Bills out</div><div class="toggle-opt '+(at==='personal'?'on':'')+'" id="m-at-personal" onclick="setAcctType(\'personal\',this)" style="flex:1;justify-content:center;">👤 Personal in</div></div><p style="font-size:12px;color:var(--t2);margin-top:4px;" id="m-at-hint">'+(at==='bills'?'Money goes out — shown in Allocate to top up.':'Personal spending account — gets an equal share of what\'s left.')+'</p><input type="hidden" id="m-actype" value="'+at+'">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+ac.balance+'">'+foot('Save changes','saveAcct(true)')+'</div>';
   } else if (type==='add-pot') {
     const priOpts=[['critical','🔴 Critical — must be funded every payment'],['important','🟡 Important — high priority savings'],['nice','🟢 Nice to have — lower priority goal'],['personal','⚪ Personal spending — gets the remainder']].map(x=>'<option value="'+x[0]+'">'+x[1]+'</option>').join('');
     b.innerHTML=hdr('New pot','Tell Horizon what this pot is for and it will suggest an allocation.')+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" placeholder="e.g. Tax, Rainy Day, Holiday" oninput="potNameHint(this)">'+L2('Priority')+'<select class="inp" id="m-pri" onchange="potPriHint(this)">'+priOpts+'</select><p id="m-pri-hint" style="font-size:12px;color:var(--t2);margin-top:4px;line-height:1.5;min-height:32px;"></p>'+L2('Target amount (£) — optional')+'<input class="inp" id="m-target" type="number" placeholder="e.g. 3000 for a rainy day fund">'+L2('% of each payment — optional')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" placeholder="Leave blank and Horizon suggests based on priority"><p id="m-alloc-hint" style="font-size:12px;color:var(--gr);margin-top:4px;min-height:16px;"></p>'+L2('Starting balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+foot('Add pot','savePot(false)')+'</div>';
@@ -887,7 +917,9 @@ function loadLocalPhoto(input) {
   reader.readAsDataURL(file);
 }
 
-function saveAcct(isEdit){ const name=document.getElementById('m-name').value; const bal=parseFloat(document.getElementById('m-bal').value)||0; if(!name) return; if(!S.balanceUpdated) S.balanceUpdated={}; if(isEdit){ const ac=S.accounts.find(x=>x.id===_eid); if(!ac) return; ac.name=name; ac.balance=bal; S.balanceUpdated[ac.id]=td(); }else{ const id=Date.now(); S.accounts.push({id,name,balance:bal,color:COLORS[cidx++%COLORS.length]}); S.balanceUpdated[id]=td(); } closeModal(); renderAll(); }
+function setAcctType(t,el){ document.querySelectorAll('#m-at-bills,#m-at-personal').forEach(x=>x.classList.remove('on')); el.classList.add('on'); document.getElementById('m-actype').value=t; document.getElementById('m-at-hint').textContent=t==='bills'?'Money goes out — shown in Allocate to top up.':'Personal spending account — gets an equal share of what\'s left.'; }
+function saveAcct(isEdit){ const name=document.getElementById('m-name').value; const bal=parseFloat(document.getElementById('m-bal').value)||0; const acType=document.getElementById('m-actype')?.value||'bills'; if(!name) return; if(!S.balanceUpdated) S.balanceUpdated={}; if(isEdit){ const ac=S.accounts.find(x=>x.id===_eid); if(!ac) return; ac.name=name; ac.balance=bal; ac.acType=acType; S.balanceUpdated[ac.id]=td(); }else{ const id=Date.now(); S.accounts.push({id,name,balance:bal,color:COLORS[cidx++%COLORS.length],acType}); S.balanceUpdated[id]=td(); } closeModal(); renderAll(); }
+function moveAcct(id,dir){ const i=S.accounts.findIndex(a=>a.id===id); const j=i+dir; if(j<0||j>=S.accounts.length) return; [S.accounts[i],S.accounts[j]]=[S.accounts[j],S.accounts[i]]; rManage(); saveState(); }
 function savePot(isEdit){
   const name=document.getElementById('m-name').value.trim();
   const bal=parseFloat(document.getElementById('m-bal').value)||0;
