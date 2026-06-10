@@ -41,7 +41,7 @@
     if (data.debts) window.S.debts = data.debts;
     if (data.pending !== undefined) window.S.pending = data.pending;
     if (data.balanceUpdated) window.S.balanceUpdated = data.balanceUpdated;
-    window.renderAll();
+    try{ window.renderAll(); }catch(e){ console.error('Firebase renderAll',e); }
   });
 </script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=Playfair+Display:wght@300;400&display=swap" rel="stylesheet">
@@ -1003,11 +1003,30 @@ function loadState(){
 function clearAllData(){ const b=document.getElementById('mbody'); b.innerHTML='<p style="font-size:22px;font-weight:300;font-family:var(--fs);color:var(--t1);margin-bottom:8px;">Delete all data?</p><p style="font-size:14px;color:var(--t2);margin-bottom:24px;line-height:1.6;">This will wipe everything. There\'s no undo.</p><div style="display:flex;gap:8px;"><button class="chip" style="flex:1;justify-content:center;" onclick="closeModal()">Cancel</button><button class="chip" style="flex:1;justify-content:center;background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.35);color:rgba(248,113,113,.9);" onclick="confirmDelete()">Yes, delete everything</button></div>'; document.getElementById('modal').classList.add('on'); }
 function confirmDelete(){ hapDbl(); localStorage.removeItem('hz_data'); closeModal(); location.reload(); }
 
-function renderAll(){ rHome(); rForecast(); rAllocate(); rManage(); saveState(); _animateBals(); }
+function renderAll(){
+  try{ rHome(); }catch(e){ console.error('rHome',e); }
+  try{ rForecast(); }catch(e){ console.error('rForecast',e); }
+  try{ rAllocate(); }catch(e){ console.error('rAllocate',e); }
+  try{ rManage(); }catch(e){ console.error('rManage',e); }
+  try{ saveState(); }catch(e){}
+  try{ _animateBals(); }catch(e){}
+}
 window.renderAll=renderAll;
+
+window.onerror=function(msg,src,line,col,err){
+  const el=document.getElementById('sc-home');
+  if(el&&el.innerHTML.trim().length<100){
+    el.innerHTML='<div style="padding:40px 24px;"><p style="color:#f87171;font-size:18px;font-weight:500;margin-bottom:12px;">App error — please screenshot this</p><p style="color:rgba(255,255,255,.7);font-size:13px;font-family:monospace;line-height:1.7;word-break:break-all;">'+(msg||'unknown')+'<br>Line '+line+' col '+col+'<br>'+(err&&err.stack?err.stack.replace(/</g,'&lt;'):'')+'</p></div>';
+  }
+};
+
 loadState();
 document.getElementById('bg').style.backgroundImage='url('+BG_URL+')';
-renderAll();
+try{
+  renderAll();
+}catch(e){
+  document.getElementById('sc-home').innerHTML='<div style="padding:40px 24px;"><p style="color:#f87171;font-size:18px;font-weight:500;margin-bottom:12px;">Startup error — please screenshot</p><p style="color:rgba(255,255,255,.7);font-size:13px;font-family:monospace;line-height:1.7;word-break:break-all;">'+String(e).replace(/</g,'&lt;')+'<br>'+(e.stack||'').replace(/</g,'&lt;')+'</p></div>';
+}
 
 // ════════════════════════════════════════════
 // ANIMATION SYSTEM — pure animation/haptic code
