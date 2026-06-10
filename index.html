@@ -376,6 +376,7 @@ const BG_PRESETS=[
 ];
 
 const fmt = n => Math.round(n).toLocaleString('en-GB');
+const fmtBal = n => n < 0 ? '-£' + fmt(-n) : '£' + fmt(n);
 const fmtD = d => new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
 const fmtDs = d => new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
 const td = () => new Date().toISOString().split('T')[0];
@@ -582,7 +583,7 @@ function monthSummaries() {
 
 function rForecast() {
   const wks=weeks8(); const last=wks[7].bal; const hasRisk=wks.some(w=>w.bal<0);
-  document.getElementById('fcend').textContent='£'+fmt(Math.max(0,last));
+  document.getElementById('fcend').textContent=fmtBal(last);
   document.getElementById('fcend').style.color=last>0?'var(--gr)':'var(--wa)';
   const pct=Math.min(100,Math.max(4,Math.round(last/Math.max(1,totalBal())*100)));
   document.getElementById('fcbar').style.cssText='width:'+pct+'%;background:'+(last>0?'var(--gr)':'var(--wa)')+';';
@@ -600,7 +601,7 @@ function rForecast() {
       +'<div class="r" style="margin-bottom:10px;"><span style="font-size:11px;color:var(--t3);">Out</span><span style="font-size:13px;font-weight:500;color:rgba(255,255,255,.4);">-£'+fmt(m.mOut)+'</span></div>'
       +'<div style="border-top:1px solid rgba(255,255,255,.1);padding-top:8px;">'
       +'<div class="r" style="margin-bottom:4px;"><span style="font-size:10px;color:var(--t3);">Net</span><span style="font-size:12px;font-weight:600;color:'+netColor+';">'+(m.net>=0?'+':'')+'£'+fmt(m.net)+'</span></div>'
-      +'<div class="r"><span style="font-size:10px;color:var(--t3);">End balance</span><span style="font-size:13px;font-weight:500;color:'+balColor+';">£'+fmt(Math.max(0,m.closing))+'</span></div>'
+      +'<div class="r"><span style="font-size:10px;color:var(--t3);">End balance</span><span style="font-size:13px;font-weight:500;color:'+balColor+';">'+fmtBal(m.closing)+'</span></div>'
       +'</div>'
       +(m.growing?'<div style="margin-top:8px;display:flex;align-items:center;gap:4px;"><span style="font-size:10px;color:var(--gr);">↑ Growing</span></div>':'<div style="margin-top:8px;display:flex;align-items:center;gap:4px;"><span style="font-size:10px;color:var(--wa);">↓ Shrinking</span></div>')
       +'</div>';
@@ -609,7 +610,7 @@ function rForecast() {
   document.getElementById('fcwks').innerHTML=wks.map(w=>{
     const sc=w.safe?'var(--gr)':w.low?'var(--am)':'var(--wa)'; const sl=w.safe?'Safe':w.low?'Low':'At Risk';
     const items=[...w.inc.map(i=>'<div class="fwr"><span style="font-size:13px;color:var(--t2);">'+i.name+'</span><span style="font-size:13px;font-weight:500;color:var(--gr);">+£'+fmt(i.amount)+'</span></div>'), ...w.exp.map(e=>{ const ac=S.accounts.find(a=>a.id===e.accountId); return '<div class="fwr"><span style="font-size:13px;color:var(--t2);">'+e.name+(ac?' · '+ac.name:'')+'</span><span style="font-size:13px;color:rgba(255,255,255,.4);">-£'+fmt(e.amount)+'</span></div>'; })].join('');
-    return '<div class="fwc" onclick="twf(this,'+w.w+')"><div class="fwh"><div class="r" style="margin-bottom:12px;"><span style="font-size:12px;color:var(--t3);">Week '+(w.w+1)+' · '+fmtDs(w.ws)+' – '+fmtDs(w.we)+'</span><div class="pill" style="font-size:10px;padding:3px 9px;background:'+sc+'20;color:'+sc+';border:1px solid '+sc+'45;">'+sl+'</div></div><div class="r"><div class="c g4"><p class="lbl">in</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:var(--gr);">+£'+fmt(w.wIn)+'</p></div><div class="c g4" style="align-items:center;"><p class="lbl">out</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:rgba(255,255,255,.45);">-£'+fmt(w.wOut)+'</p></div><div class="c g4" style="align-items:flex-end;"><p class="lbl">balance</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:'+sc+';">£'+fmt(Math.max(0,w.bal))+'</p></div></div></div><div class="fwb" id="fwb'+w.w+'">'+(items||'<span style="font-size:13px;color:var(--t3);">Nothing this week</span>')+'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);"><div class="fwr"><span style="font-size:13px;color:var(--t3);">Net</span><span style="font-size:13px;font-weight:500;color:'+(w.net>=0?'var(--gr)':'var(--wa)')+';">'+(w.net>=0?'+':'')+'£'+fmt(w.net)+'</span></div></div></div></div>';
+    return '<div class="fwc" onclick="twf(this,'+w.w+')"><div class="fwh"><div class="r" style="margin-bottom:12px;"><span style="font-size:12px;color:var(--t3);">Week '+(w.w+1)+' · '+fmtDs(w.ws)+' – '+fmtDs(w.we)+'</span><div class="pill" style="font-size:10px;padding:3px 9px;background:'+sc+'20;color:'+sc+';border:1px solid '+sc+'45;">'+sl+'</div></div><div class="r"><div class="c g4"><p class="lbl">in</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:var(--gr);">+£'+fmt(w.wIn)+'</p></div><div class="c g4" style="align-items:center;"><p class="lbl">out</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:rgba(255,255,255,.45);">-£'+fmt(w.wOut)+'</p></div><div class="c g4" style="align-items:flex-end;"><p class="lbl">balance</p><p style="font-size:18px;font-weight:400;font-family:var(--fs);color:'+sc+';">'+fmtBal(w.bal)+'</p></div></div></div><div class="fwb" id="fwb'+w.w+'">'+(items||'<span style="font-size:13px;color:var(--t3);">Nothing this week</span>')+'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08);"><div class="fwr"><span style="font-size:13px;color:var(--t3);">Net</span><span style="font-size:13px;font-weight:500;color:'+(w.net>=0?'var(--gr)':'var(--wa)')+';">'+(w.net>=0?'+':'')+'£'+fmt(w.net)+'</span></div></div></div></div>';
   }).join('');
 }
 function twf(el,i){ const b=document.getElementById('fwb'+i); const o=b.classList.contains('on'); document.querySelectorAll('.fwb').forEach(x=>x.classList.remove('on')); document.querySelectorAll('.fwc').forEach(x=>x.classList.remove('open')); if(!o){b.classList.add('on');el.classList.add('open');} }
