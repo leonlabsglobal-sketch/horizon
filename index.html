@@ -638,31 +638,67 @@ function twf(el,i){ const b=document.getElementById('fwb'+i); const o=b.classLis
 // ── Smart allocation engine ──
 let _allocEdits = {};
 
+// Returns a smart suggested % for a pot that has no explicit alloc set,
+// based on its priority level and how far it is from its target.
+function suggestPotPct(p, monthlyBills) {
+  const pri=p.priority||'personal';
+  // If pot has a target, weight allocation by urgency (how far from target)
+  const fillPct=p.target>0?Math.min(1,p.current/p.target):0;
+  const urgency=1-fillPct; // 0 = full, 1 = empty
+  if(pri==='critical') return Math.round(Math.max(5, 15*urgency));
+  if(pri==='important') return Math.round(Math.max(3, 10*urgency));
+  if(pri==='nice') return Math.round(Math.max(2, 5*urgency));
+  return 0; // personal pots get the remainder
+}
+
 function smartAlloc(gross, costs) {
   const net=Math.max(0,gross-costs);
-  // Step 1: Bills — total monthly expenses
   const monthlyBills=Math.round(S.expenses.reduce((a,e)=>a+expMonthly(e),0));
-  const billsSuggested=Math.min(monthlyBills,net);
-  // Step 2: Pots with an explicit % get their slice of net (not after bills — they're from the gross payment)
-  let usedByPct=0;
-  const pctPots=S.pots.filter(p=>p.alloc>0);
-  const freePots=S.pots.filter(p=>!(p.alloc>0));
+  // Bills buffer: build toward 2 months of expenses as a cushion.
+  // Contribution tapers as the buffer fills.
+  const billsTarget=monthlyBills*2;
+  const billsAcctBal=S.accounts.reduce((a,ac)=>a+ac.balance,0); // total in accounts as proxy
+  const billsGap=Math.max(0,billsTarget-billsAcctBal);
+  // Suggest 15% of payment toward bills buffer, capped at the gap, min the immediate need
+  const billsSuggested=Math.min(net,Math.max(monthlyBills,Math.round(Math.min(billsGap,net*0.15))));
+
+  // Separate pots by whether they have an explicit alloc % set
+  const explicitPots=S.pots.filter(p=>p.alloc>0);
+  const autoPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')!=='personal');
+  const personalPots=S.pots.filter(p=>!(p.alloc>0)&&(p.priority||'personal')==='personal');
+
+  let used=billsSuggested;
   const potItems=[];
-  pctPots.forEach(p=>{
+
+  // Explicit % pots
+  explicitPots.forEach(p=>{
     const amt=Math.round(net*(p.alloc/100));
-    usedByPct+=amt;
-    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note:p.alloc+'% of this payment',pot:p,hasPct:true});
+    used+=amt;
+    const note=p.alloc+'% of this payment'+(p.target>0?' · '+Math.min(100,Math.round(p.current/p.target*100))+'% towards £'+fmt(p.target)+' target':'');
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note,pot:p});
   });
-  // Step 3: Free pots (no %) get equal share of what's left after bills + pct pots
-  const afterAll=Math.max(0,net-billsSuggested-usedByPct);
-  const n=freePots.length;
-  const perFree=n>0?Math.floor(afterAll/n):0;
-  freePots.forEach(p=>{
-    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perFree,note:'Equal share of what\'s left — set a % to change this',pot:p,hasPct:false});
+
+  // Auto-suggested % pots (critical/important/nice with no explicit %)
+  autoPots.forEach(p=>{
+    const pct=suggestPotPct(p,monthlyBills);
+    const amt=Math.round(net*(pct/100));
+    used+=amt;
+    const fillMsg=p.target>0?' · '+Math.min(100,Math.round(p.current/p.target*100))+'% towards £'+fmt(p.target):'';
+    const priLabel={'critical':'Critical','important':'Important','nice':'Nice to have'}[p.priority]||'';
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note:priLabel+' · suggested '+pct+'%'+fillMsg+' — tap to adjust',pot:p});
   });
-  // Keep original pot order
+
+  // Personal pots: equal split of whatever is left
+  const afterAll=Math.max(0,net-used);
+  const nP=personalPots.length;
+  const perPersonal=nP>0?Math.floor(afterAll/nP):0;
+  personalPots.forEach(p=>{
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perPersonal,note:'Your spending money — equal share of what\'s left',pot:p});
+  });
+
+  // Restore original pot order
   potItems.sort((a,b)=>S.pots.findIndex(p=>p.id===a.pot.id)-S.pots.findIndex(p=>p.id===b.pot.id));
-  return {net,billsSuggested,monthlyBills,potItems};
+  return {net,billsSuggested,monthlyBills,billsTarget,billsAcctBal,potItems};
 }
 
 function allocRemainder() {
@@ -692,7 +728,9 @@ function rAllocate() {
   }
   const r=smartAlloc(p.amount,p.costs||0);
   const inputStyle='width:80px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;';
-  const billsRow='<div class="ar"><div class="ad" style="background:rgba(248,113,113,.7);"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;color:var(--t1);">Bills &amp; expenses</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+r.billsSuggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\'bills\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">Your monthly expenses total £'+fmt(r.monthlyBills)+'</p></div></div>';
+  const bufferPct=r.billsTarget>0?Math.min(100,Math.round(r.billsAcctBal/r.billsTarget*100)):0;
+  const bufferNote=r.billsTarget>0?'Building a 2-month buffer ('+bufferPct+'% there · target £'+fmt(r.billsTarget)+') · monthly bills £'+fmt(r.monthlyBills):'Monthly expenses: £'+fmt(r.monthlyBills);
+  const billsRow='<div class="ar"><div class="ad" style="background:rgba(248,113,113,.7);"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;color:var(--t1);">Bills &amp; buffer</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+r.billsSuggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\'bills\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+bufferNote+'</p></div></div>';
   const potRows=r.potItems.map(item=>'<div class="ar"><div class="ad" style="background:'+item.color+';"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;">'+item.name+'</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+item.suggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\''+item.uid+'\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+item.note+'</p></div></div>').join('');
   const initialRem=allocRemainder();
   el.innerHTML=
@@ -738,7 +776,12 @@ function rManage() {
   } else if (t==='pots') {
     const potTotal=S.pots.reduce((a,p)=>a+p.current,0);
     const potTotalCard='<div style="padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">Total in pots</p><p style="font-size:16px;font-weight:500;color:var(--t1);font-family:var(--fs);">£'+fmt(potTotal)+'</p></div>';
-    const potCards=S.pots.map(p=>'<div class="glass"><div class="r" style="margin-bottom:4px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">'+(p.alloc>0?p.alloc+'% of each payment':'Shares what\'s left after fixed % pots')+'</p><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delPot('+p.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
+    const priLabel={'critical':'🔴 Critical','important':'🟡 Important','nice':'🟢 Nice to have','personal':'⚪ Personal'};
+    const potCards=S.pots.map(p=>{
+      const pri=p.priority||'personal';
+      const allocDesc=p.alloc>0?p.alloc+'% of each payment':pri==='personal'?'Equal share of remainder':'Horizon auto-suggests based on priority';
+      const targetBar=p.target>0?'<div class="btr" style="margin-bottom:4px;"><div class="bfill" style="width:'+Math.min(100,Math.round(p.current/p.target*100))+'%;background:'+p.color+';"></div></div><p style="font-size:11px;color:var(--t3);margin-bottom:10px;">'+Math.min(100,Math.round(p.current/p.target*100))+'% towards £'+fmt(p.target)+' target</p>':'';
+      return '<div class="glass"><div class="r" style="margin-bottom:4px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div><p style="font-size:12px;color:var(--t3);margin-bottom:6px;">'+(priLabel[pri]||'')+'  ·  '+allocDesc+'</p>'+targetBar<div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delPot('+p.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
     el.innerHTML=potTotalCard+potCards+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-pot\')"><i class="ti ti-plus"></i>Add pot</button>';
   } else if (t==='income') {
     el.innerHTML=S.income.map(i=>'<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+i.name+'</p><p style="font-size:12px;color:var(--t3);">'+i.cat+' · '+i.freq+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+£'+fmt(i.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-inc\','+i.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delInc('+i.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>').join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-inc\')"><i class="ti ti-plus"></i>Add income source</button>';
@@ -813,11 +856,14 @@ function openModal(type, id) {
     const ac=S.accounts.find(x=>x.id===id); if(!ac) return;
     b.innerHTML=hdr('Edit · '+ac.name)+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" value="'+ac.name+'">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+ac.balance+'">'+foot('Save changes','saveAcct(true)')+'</div>';
   } else if (type==='add-pot') {
-    b.innerHTML=hdr('New pot','Horizon will suggest how much to put in when you get paid.')+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" placeholder="e.g. Tax, Holiday, Rainy Day" oninput="potNameHint(this)">'+L2('Starting balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+L2('% of each payment (optional)')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" placeholder="Leave blank to share what\'s left">'+' <p id="m-alloc-hint" style="font-size:12px;color:var(--gr);margin-top:4px;min-height:16px;"></p>'+foot('Add pot','savePot(false)')+'</div>';
+    const priOpts=[['critical','🔴 Critical — must be funded every payment'],['important','🟡 Important — high priority savings'],['nice','🟢 Nice to have — lower priority goal'],['personal','⚪ Personal spending — gets the remainder']].map(x=>'<option value="'+x[0]+'">'+x[1]+'</option>').join('');
+    b.innerHTML=hdr('New pot','Tell Horizon what this pot is for and it will suggest an allocation.')+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" placeholder="e.g. Tax, Rainy Day, Holiday" oninput="potNameHint(this)">'+L2('Priority')+'<select class="inp" id="m-pri" onchange="potPriHint(this)">'+priOpts+'</select><p id="m-pri-hint" style="font-size:12px;color:var(--t2);margin-top:4px;line-height:1.5;min-height:32px;"></p>'+L2('Target amount (£) — optional')+'<input class="inp" id="m-target" type="number" placeholder="e.g. 3000 for a rainy day fund">'+L2('% of each payment — optional')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" placeholder="Leave blank and Horizon suggests based on priority"><p id="m-alloc-hint" style="font-size:12px;color:var(--gr);margin-top:4px;min-height:16px;"></p>'+L2('Starting balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+foot('Add pot','savePot(false)')+'</div>';
   } else if (type==='edit-pot') {
     const p=S.pots.find(x=>x.id===id); if(!p) return;
-    const allocPct=p.alloc>0?p.alloc:'';
-    b.innerHTML=hdr('Edit · '+p.name)+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" value="'+p.name+'">'+L2('Balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+p.current+'">'+L2('% of each payment (optional)')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" value="'+allocPct+'" placeholder="Leave blank to share what\'s left"><p style="font-size:12px;color:var(--t3);margin-top:4px;">Set a percentage so this pot always gets its share first. Leave blank and it splits whatever\'s left after fixed % pots.</p>'+foot('Save changes','savePot(true)')+'</div>';
+    const pri=p.priority||'personal';
+    const priOpts=[['critical','🔴 Critical — must be funded every payment'],['important','🟡 Important — high priority savings'],['nice','🟢 Nice to have — lower priority goal'],['personal','⚪ Personal spending — gets the remainder']].map(x=>'<option value="'+x[0]+'" '+(pri===x[0]?'selected':'')+'>'+x[1]+'</option>').join('');
+    const priDescs={critical:'Always funded first. Horizon will suggest ~15% until the target is met.',important:'Funded after Critical pots. Horizon will suggest ~10%.',nice:'Funded after Important. Horizon will suggest ~5%.',personal:'Gets an equal share of whatever is left after everything else.'};
+    b.innerHTML=hdr('Edit · '+p.name)+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" value="'+p.name+'">'+L2('Priority')+'<select class="inp" id="m-pri">'+priOpts+'</select><p style="font-size:12px;color:var(--t2);margin-top:4px;line-height:1.5;">'+priDescs[pri]+'</p>'+L2('Target amount (£) — optional')+'<input class="inp" id="m-target" type="number" value="'+(p.target||'')+'" placeholder="e.g. 3000">'+L2('% of each payment — optional')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" value="'+(p.alloc||'')+'" placeholder="Leave blank and Horizon suggests">'+L2('Balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+p.current+'">'+foot('Save changes','savePot(true)')+'</div>';
   } else if (type==='withdraw-pot') {
     const p=S.pots.find(x=>x.id===id); if(!p) return;
     const acOpts=S.accounts.map(a=>'<option value="'+a.id+'">'+a.name+'</option>').join('');
@@ -856,20 +902,48 @@ function loadLocalPhoto(input) {
 
 function saveAcct(isEdit){ const name=document.getElementById('m-name').value; const bal=parseFloat(document.getElementById('m-bal').value)||0; if(!name) return; if(!S.balanceUpdated) S.balanceUpdated={}; if(isEdit){ const ac=S.accounts.find(x=>x.id===_eid); if(!ac) return; ac.name=name; ac.balance=bal; S.balanceUpdated[ac.id]=td(); }else{ const id=Date.now(); S.accounts.push({id,name,balance:bal,color:COLORS[cidx++%COLORS.length]}); S.balanceUpdated[id]=td(); } closeModal(); renderAll(); }
 function savePot(isEdit){
-  const name=document.getElementById('m-name').value.trim(); const bal=parseFloat(document.getElementById('m-bal').value)||0; if(!name) return;
+  const name=document.getElementById('m-name').value.trim();
+  const bal=parseFloat(document.getElementById('m-bal').value)||0;
+  if(!name) return;
   const allocRaw=document.getElementById('m-alloc')?.value;
   const alloc=allocRaw&&allocRaw.trim()!==''?Math.min(100,Math.max(0,parseFloat(allocRaw)||0)):0;
-  if(isEdit){ const p=S.pots.find(x=>x.id===_eid); if(!p) return; p.name=name; p.current=bal; p.alloc=alloc; }
-  else{ S.pots.push({id:Date.now(),name,color:COLORS[cidx++%COLORS.length],current:bal,alloc}); }
+  const priority=document.getElementById('m-pri')?.value||'personal';
+  const targetRaw=document.getElementById('m-target')?.value;
+  const target=targetRaw&&targetRaw.trim()!==''?parseFloat(targetRaw)||0:0;
+  if(isEdit){
+    const p=S.pots.find(x=>x.id===_eid); if(!p) return;
+    p.name=name; p.current=bal; p.alloc=alloc; p.priority=priority; p.target=target;
+  } else {
+    S.pots.push({id:Date.now(),name,color:COLORS[cidx++%COLORS.length],current:bal,alloc,priority,target});
+  }
   closeModal(); rManage(); saveState();
 }
 function potNameHint(inp){
-  const n=inp.value.toLowerCase(); const el=document.getElementById('m-alloc-hint'); if(!el) return;
+  const n=inp.value.toLowerCase();
+  const priSel=document.getElementById('m-pri');
   const allocInp=document.getElementById('m-alloc');
-  if(/tax/.test(n)){ el.textContent='Tip: tax pots typically take 20% off every payment.'; if(allocInp&&!allocInp.value) allocInp.value=20; }
-  else if(/rainy|emergency|backup/.test(n)){ el.textContent='Tip: even 5–10% here builds a safety cushion fast.'; }
-  else if(/holiday|travel|vacation/.test(n)){ el.textContent='Tip: 5% per payment adds up without feeling it.'; }
-  else{ el.textContent=''; }
+  const hint=document.getElementById('m-alloc-hint');
+  if(/tax/.test(n)){
+    if(priSel) priSel.value='critical'; potPriHint(priSel);
+    if(allocInp&&!allocInp.value) allocInp.value=20;
+    if(hint) hint.textContent='20% pre-filled — standard self-employment tax provision.';
+  } else if(/rainy|emergency|backup/.test(n)){
+    if(priSel) priSel.value='important'; potPriHint(priSel);
+    if(hint) hint.textContent='Suggested: Important priority, build toward a target of £3,000+';
+  } else if(/holiday|travel|vacation/.test(n)){
+    if(priSel) priSel.value='nice'; potPriHint(priSel);
+    if(hint) hint.textContent='Suggested: Nice to have — Horizon will put ~5% here.';
+  } else if(hint){ hint.textContent=''; }
+}
+function potPriHint(sel){
+  const descs={
+    critical:'Always funded first — Horizon suggests ~15% per payment until target is met. Use for Tax, critical reserves.',
+    important:'High priority — Horizon suggests ~10% per payment. Use for Rainy Day, business buffer.',
+    nice:'Lower priority — Horizon suggests ~5% per payment. Use for Holiday, goals.',
+    personal:'Gets an equal share of whatever is left after all other pots. Use for personal spending money.'
+  };
+  const el=sel?.parentElement?.querySelector('p[id="m-pri-hint"]')||sel?.nextElementSibling;
+  if(el) el.textContent=descs[sel?.value]||'';
 }
 function saveInc(isEdit){ const name=document.getElementById('m-name').value; const amt=parseFloat(document.getElementById('m-amt').value)||0; const date=document.getElementById('m-date').value||td(); const freq=document.getElementById('m-freq').value; if(!name||!amt) return; if(isEdit){ const i=S.income.find(x=>x.id===_eid); if(!i) return; i.name=name; i.amount=amt; i.date=date; i.freq=freq; }else{ S.income.push({id:Date.now(),name,amount:amt,date,freq,cat:'other'}); } closeModal(); renderAll(); }
 function saveExp(isEdit){
