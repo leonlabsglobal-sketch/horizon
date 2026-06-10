@@ -633,15 +633,18 @@ function suggestPotPct(p, monthlyBills) {
 function smartAlloc(gross, costs) {
   const net=Math.max(0,gross-costs);
   const monthlyBills=Math.round(S.expenses.reduce((a,e)=>a+expMonthly(e),0));
-
-  // Bills buffer: build toward 2 months of expenses over time.
-  // Each payment contributes 20% — never tries to fund a whole month at once.
   const billsTarget=monthlyBills*2;
   const billsAcctBal=S.accounts.reduce((a,ac)=>a+ac.balance,0);
   const billsGap=Math.max(0,billsTarget-billsAcctBal);
-  const billsSuggested=billsGap>0?Math.min(Math.round(net*0.2),billsGap):0;
 
-  // Remaining after bills buffer contribution
+  // Priority 1: cover account shortfalls (Bills first, then Business, then others by size)
+  const sortedAccts=[...S.accounts].sort((a,b)=>acctExpenses(b.id)-acctExpenses(a.id));
+  const totalShortfall=sortedAccts.reduce((a,ac)=>a+acctShort(ac),0);
+  // Priority 2: after shortfalls are met, add 10% toward buffer (if gap remains)
+  const bufferExtra=billsGap>totalShortfall?Math.min(Math.round(net*0.1),billsGap-totalShortfall):0;
+  const billsSuggested=Math.min(net,totalShortfall+bufferExtra);
+
+  // Remaining after bills
   const remaining=Math.max(0,net-billsSuggested);
 
   const explicitPots=S.pots.filter(p=>p.alloc>0);
@@ -678,7 +681,7 @@ function smartAlloc(gross, costs) {
   });
 
   potItems.sort((a,b)=>S.pots.findIndex(p=>p.id===a.pot.id)-S.pots.findIndex(p=>p.id===b.pot.id));
-  return {net,billsSuggested,monthlyBills,billsTarget,billsAcctBal,potItems};
+  return {net,billsSuggested,monthlyBills,billsTarget,billsAcctBal,totalShortfall,potItems};
 }
 
 function allocRemainder() {
@@ -709,7 +712,10 @@ function rAllocate() {
   const r=smartAlloc(p.amount,p.costs||0);
   const inputStyle='width:80px;text-align:right;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:4px 8px;color:var(--t1);font-size:15px;font-weight:500;font-family:var(--ff);outline:none;';
   const bufferPct=r.billsTarget>0?Math.min(100,Math.round(r.billsAcctBal/r.billsTarget*100)):0;
-  const bufferNote=r.billsTarget>0?'Building a 2-month buffer ('+bufferPct+'% there · target £'+fmt(r.billsTarget)+') · monthly bills £'+fmt(r.monthlyBills):'Monthly expenses: £'+fmt(r.monthlyBills);
+  const shortfallNote=r.totalShortfall>0
+    ?'Account shortfalls: £'+fmt(r.totalShortfall)+(r.billsSuggested<r.totalShortfall?' (partial — payment covers what it can)':' covered')
+    :'Accounts covered';
+  const bufferNote=shortfallNote+(r.billsTarget>0?' · buffer '+bufferPct+'% of £'+fmt(r.billsTarget)+' target':'');
   const billsRow='<div class="ar"><div class="ad" style="background:rgba(248,113,113,.7);"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;color:var(--t1);">Bills &amp; buffer</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+r.billsSuggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\'bills\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+bufferNote+'</p></div></div>';
   const potRows=r.potItems.map(item=>'<div class="ar"><div class="ad" style="background:'+item.color+';"></div><div style="flex:1;"><div class="r" style="margin-bottom:2px;"><span style="font-size:15px;font-weight:500;">'+item.name+'</span><div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:var(--t3);">£</span><input type="number" value="'+item.suggested+'" inputmode="decimal" style="'+inputStyle+'" oninput="allocEdit(\''+item.uid+'\',this.value);updateAllocRemainder()"></div></div><p style="font-size:12px;color:var(--t3);">'+item.note+'</p></div></div>').join('');
   const initialRem=allocRemainder();
