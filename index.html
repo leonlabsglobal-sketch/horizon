@@ -640,14 +640,28 @@ let _allocEdits = {};
 
 function smartAlloc(gross, costs) {
   const net=Math.max(0,gross-costs);
-  // Bills: total monthly equivalent of all expenses
+  // Step 1: Bills — total monthly expenses
   const monthlyBills=Math.round(S.expenses.reduce((a,e)=>a+expMonthly(e),0));
   const billsSuggested=Math.min(monthlyBills,net);
-  // Pots: equal split of what's left after bills
-  const afterBills=Math.max(0,net-billsSuggested);
-  const n=S.pots.length;
-  const perPot=n>0?Math.floor(afterBills/n):0;
-  const potItems=S.pots.map(p=>({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perPot,note:'Adjust to whatever feels right',skip:false,pot:p}));
+  // Step 2: Pots with an explicit % get their slice of net (not after bills — they're from the gross payment)
+  let usedByPct=0;
+  const pctPots=S.pots.filter(p=>p.alloc>0);
+  const freePots=S.pots.filter(p=>!(p.alloc>0));
+  const potItems=[];
+  pctPots.forEach(p=>{
+    const amt=Math.round(net*(p.alloc/100));
+    usedByPct+=amt;
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:amt,note:p.alloc+'% of this payment',pot:p,hasPct:true});
+  });
+  // Step 3: Free pots (no %) get equal share of what's left after bills + pct pots
+  const afterAll=Math.max(0,net-billsSuggested-usedByPct);
+  const n=freePots.length;
+  const perFree=n>0?Math.floor(afterAll/n):0;
+  freePots.forEach(p=>{
+    potItems.push({uid:'pot-'+p.id,name:p.name,color:p.color,suggested:perFree,note:'Equal share of what\'s left — set a % to change this',pot:p,hasPct:false});
+  });
+  // Keep original pot order
+  potItems.sort((a,b)=>S.pots.findIndex(p=>p.id===a.pot.id)-S.pots.findIndex(p=>p.id===b.pot.id));
   return {net,billsSuggested,monthlyBills,potItems};
 }
 
@@ -724,7 +738,7 @@ function rManage() {
   } else if (t==='pots') {
     const potTotal=S.pots.reduce((a,p)=>a+p.current,0);
     const potTotalCard='<div style="padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><p style="font-size:12px;color:rgba(255,255,255,.5);">Total in pots</p><p style="font-size:16px;font-weight:500;color:var(--t1);font-family:var(--fs);">£'+fmt(potTotal)+'</p></div>';
-    const potCards=S.pots.map(p=>'<div class="glass"><div class="r" style="margin-bottom:14px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delPot('+p.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
+    const potCards=S.pots.map(p=>'<div class="glass"><div class="r" style="margin-bottom:4px;"><div style="display:flex;align-items:center;gap:10px;"><div style="width:9px;height:9px;border-radius:50%;background:'+p.color+';"></div><p style="font-size:16px;font-weight:500;color:var(--t1);">'+p.name+'</p></div><p style="font-size:22px;font-weight:400;font-family:var(--fs);color:var(--t1);">£'+fmt(p.current)+'</p></div><p style="font-size:12px;color:var(--t3);margin-bottom:14px;">'+(p.alloc>0?p.alloc+'% of each payment':'Shares what\'s left after fixed % pots')+'</p><div class="r" style="margin-bottom:14px;"><p style="font-size:13px;color:var(--t2);">Show on home screen</p><div onclick="toggleHome(\'pot\','+p.id+')" style="width:42px;height:24px;border-radius:12px;background:'+(p.showHome?'var(--gr)':'rgba(255,255,255,.15)')+';position:relative;cursor:pointer;transition:background .2s;"><div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:3px;left:'+(p.showHome?'21px':'3px')+';transition:left .2s;"></div></div></div><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',-1)"><i class="ti ti-arrow-up" style="font-size:13px;"></i></button><button class="chip chip-sm" style="padding:7px 10px;" onclick="movePot('+p.id+',1)"><i class="ti ti-arrow-down" style="font-size:13px;"></i></button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'withdraw-pot\','+p.id+')"><i class="ti ti-arrow-bar-to-down" style="font-size:13px;"></i>Withdraw</button><button class="chip chip-sm" style="flex:1;" onclick="openModal(\'edit-pot\','+p.id+')"><i class="ti ti-edit" style="font-size:13px;"></i>Edit</button><button class="chip chip-wa chip-sm" style="padding:7px 10px;" onclick="shakeAndDel(this,()=>delPot('+p.id+'))"><i class="ti ti-trash" style="font-size:13px;"></i></button></div></div>').join('');
     el.innerHTML=potTotalCard+potCards+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-pot\')"><i class="ti ti-plus"></i>Add pot</button>';
   } else if (t==='income') {
     el.innerHTML=S.income.map(i=>'<div class="glass-sm"><div class="r"><div class="c g4"><p style="font-size:14px;font-weight:500;color:var(--t1);">'+i.name+'</p><p style="font-size:12px;color:var(--t3);">'+i.cat+' · '+i.freq+'</p></div><div class="c g4" style="align-items:flex-end;"><p style="font-size:16px;font-weight:400;color:var(--gr);font-family:var(--fs);">+£'+fmt(i.amount)+'</p><div style="display:flex;gap:6px;"><button class="chip chip-sm" style="font-size:12px;" onclick="openModal(\'edit-inc\','+i.id+')"><i class="ti ti-edit" style="font-size:12px;"></i></button><button class="chip chip-wa chip-sm" style="font-size:12px;" onclick="shakeAndDel(this,()=>delInc('+i.id+'))"><i class="ti ti-trash" style="font-size:12px;"></i></button></div></div></div></div>').join('')+'<button class="chip" style="width:100%;justify-content:center;border-style:dashed;" onclick="openModal(\'add-inc\')"><i class="ti ti-plus"></i>Add income source</button>';
@@ -799,10 +813,11 @@ function openModal(type, id) {
     const ac=S.accounts.find(x=>x.id===id); if(!ac) return;
     b.innerHTML=hdr('Edit · '+ac.name)+'<div class="c g12">'+L2('Account name')+'<input class="inp" id="m-name" value="'+ac.name+'">'+L2('Current balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+ac.balance+'">'+foot('Save changes','saveAcct(true)')+'</div>';
   } else if (type==='add-pot') {
-    b.innerHTML=hdr('New pot','Horizon will suggest how much to put in when you get paid.')+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" placeholder="e.g. Tax, Holiday, Rainy Day">'+L2('Starting balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+foot('Add pot','savePot(false)')+'</div>';
+    b.innerHTML=hdr('New pot','Horizon will suggest how much to put in when you get paid.')+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" placeholder="e.g. Tax, Holiday, Rainy Day" oninput="potNameHint(this)">'+L2('Starting balance (£)')+'<input class="inp" id="m-bal" type="number" placeholder="0">'+L2('% of each payment (optional)')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" placeholder="Leave blank to share what\'s left">'+' <p id="m-alloc-hint" style="font-size:12px;color:var(--gr);margin-top:4px;min-height:16px;"></p>'+foot('Add pot','savePot(false)')+'</div>';
   } else if (type==='edit-pot') {
     const p=S.pots.find(x=>x.id===id); if(!p) return;
-    b.innerHTML=hdr('Edit · '+p.name)+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" value="'+p.name+'">'+L2('Balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+p.current+'">'+foot('Save changes','savePot(true)')+'</div>';
+    const allocPct=p.alloc>0?p.alloc:'';
+    b.innerHTML=hdr('Edit · '+p.name)+'<div class="c g12">'+L2('Name')+'<input class="inp" id="m-name" value="'+p.name+'">'+L2('Balance (£)')+'<input class="inp" id="m-bal" type="number" value="'+p.current+'">'+L2('% of each payment (optional)')+'<input class="inp" id="m-alloc" type="number" min="0" max="100" value="'+allocPct+'" placeholder="Leave blank to share what\'s left"><p style="font-size:12px;color:var(--t3);margin-top:4px;">Set a percentage so this pot always gets its share first. Leave blank and it splits whatever\'s left after fixed % pots.</p>'+foot('Save changes','savePot(true)')+'</div>';
   } else if (type==='withdraw-pot') {
     const p=S.pots.find(x=>x.id===id); if(!p) return;
     const acOpts=S.accounts.map(a=>'<option value="'+a.id+'">'+a.name+'</option>').join('');
@@ -842,9 +857,19 @@ function loadLocalPhoto(input) {
 function saveAcct(isEdit){ const name=document.getElementById('m-name').value; const bal=parseFloat(document.getElementById('m-bal').value)||0; if(!name) return; if(!S.balanceUpdated) S.balanceUpdated={}; if(isEdit){ const ac=S.accounts.find(x=>x.id===_eid); if(!ac) return; ac.name=name; ac.balance=bal; S.balanceUpdated[ac.id]=td(); }else{ const id=Date.now(); S.accounts.push({id,name,balance:bal,color:COLORS[cidx++%COLORS.length]}); S.balanceUpdated[id]=td(); } closeModal(); renderAll(); }
 function savePot(isEdit){
   const name=document.getElementById('m-name').value.trim(); const bal=parseFloat(document.getElementById('m-bal').value)||0; if(!name) return;
-  if(isEdit){ const p=S.pots.find(x=>x.id===_eid); if(!p) return; p.name=name; p.current=bal; }
-  else{ S.pots.push({id:Date.now(),name,color:COLORS[cidx++%COLORS.length],current:bal}); }
+  const allocRaw=document.getElementById('m-alloc')?.value;
+  const alloc=allocRaw&&allocRaw.trim()!==''?Math.min(100,Math.max(0,parseFloat(allocRaw)||0)):0;
+  if(isEdit){ const p=S.pots.find(x=>x.id===_eid); if(!p) return; p.name=name; p.current=bal; p.alloc=alloc; }
+  else{ S.pots.push({id:Date.now(),name,color:COLORS[cidx++%COLORS.length],current:bal,alloc}); }
   closeModal(); rManage(); saveState();
+}
+function potNameHint(inp){
+  const n=inp.value.toLowerCase(); const el=document.getElementById('m-alloc-hint'); if(!el) return;
+  const allocInp=document.getElementById('m-alloc');
+  if(/tax/.test(n)){ el.textContent='Tip: tax pots typically take 20% off every payment.'; if(allocInp&&!allocInp.value) allocInp.value=20; }
+  else if(/rainy|emergency|backup/.test(n)){ el.textContent='Tip: even 5–10% here builds a safety cushion fast.'; }
+  else if(/holiday|travel|vacation/.test(n)){ el.textContent='Tip: 5% per payment adds up without feeling it.'; }
+  else{ el.textContent=''; }
 }
 function saveInc(isEdit){ const name=document.getElementById('m-name').value; const amt=parseFloat(document.getElementById('m-amt').value)||0; const date=document.getElementById('m-date').value||td(); const freq=document.getElementById('m-freq').value; if(!name||!amt) return; if(isEdit){ const i=S.income.find(x=>x.id===_eid); if(!i) return; i.name=name; i.amount=amt; i.date=date; i.freq=freq; }else{ S.income.push({id:Date.now(),name,amount:amt,date,freq,cat:'other'}); } closeModal(); renderAll(); }
 function saveExp(isEdit){
